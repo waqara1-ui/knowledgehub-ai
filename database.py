@@ -13,7 +13,7 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread":False})
 
 #im creating a SessionLocal class and each instance of it will be a database session.
 #Each session is responsible for all communications with the database
-SessionLocal = sessionmaker(autocommit=False, autoFLush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 #database models (tables) inheriting from Base class
 class Base(DeclarativeBase):

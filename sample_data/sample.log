@@ -1,0 +1,4 @@
+2024-06-01T10:42:11Z INFO User 123 logged in
+2024-06-01T10:44:03Z ERROR Database timeout on query xyz
+malformed line without timestamp
+2024-06-01T10:45:00Z WARN Slow response from Redis

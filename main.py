@@ -7,6 +7,7 @@ from datetime import datetime
 import re  #for log parsing
 
 from database import engine, Base, get_database
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 import models
 
@@ -58,7 +59,7 @@ def detect_document_type(file: UploadFile) -> str:
     filename = file.filename or ""
     lower_name = filename.lower()
 
-    if lower_name.endswith(".log") or "log" in lower_name:
+    if lower_name.endswith((".log", ".jsonl", ".ndjson")): # Common log extensions
         return models.DocumentType.LOG
     if lower_name.endswith(".pdf"):
         return models.DocumentType.RUNBOOK
@@ -234,3 +235,73 @@ async def upload_document(
             "status": document.status,
             "message": "Runbook/document uploaded. Text parsing/chunking will be added in a later phase.",
         }
+
+@app.get("/logs/{document_id}/summary", response_model=dict)
+def get_log_summary(document_id: int, db: DbSessionDep):
+    """
+    Retrieves a summary of log entries for a given document.
+
+    Includes:
+    - Total log entries
+    - Count by log level (INFO, WARN, ERROR, etc.)
+    - Clustered common messages (top N most frequent messages)
+    - Time range of logs
+    """
+    #Verifying document exists and is a log file
+    document = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    if document.type != models.DocumentType.LOG:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document is not a log file.")
+    
+    # 2. Get basic counts and time range
+    total_entries = db.query(models.LogEntry).filter(models.LogEntry.document_id == document_id).count()
+
+
+    # Get min/max timestamps for the log entries
+    time_range = db.query(
+        func.min(models.LogEntry.timestamp),
+        func.max(models.LogEntry.timestamp)
+    ).filter(models.LogEntry.document_id == document_id).first()
+
+    first_log_time, last_log_time = time_range if time_range else (None, None)
+
+     # 3. Count by log level
+    # This groups by the 'level' column and counts occurrences
+    level_counts = (
+        db.query(models.LogEntry.level, func.count(models.LogEntry.id))
+        .filter(models.LogEntry.document_id == document_id)
+        .group_by(models.LogEntry.level)
+        .order_by(func.count(models.LogEntry.id).desc())
+        .all()
+    )
+
+    # Format: {"INFO": 100, "ERROR": 20, "WARN": 5}
+    formatted_level_counts = {level: count for level, count in level_counts if level is not None}
+    if None in [lc[0] for lc in level_counts]: # Include entries without a recognized level
+        formatted_level_counts["UNKNOWN_LEVEL"] = next((lc[1] for lc in level_counts if lc[0] is None), 0)
+
+    # 4. Cluster common messages (top N)
+    # This groups by the 'message' column and counts occurrences
+    message_clusters = (
+        db.query(models.LogEntry.message, func.count(models.LogEntry.id))
+        .filter(models.LogEntry.document_id == document_id)
+        .group_by(models.LogEntry.message)
+        .order_by(func.count(models.LogEntry.id).desc())
+        .limit(10) # Get top 10 most frequent messages
+        .all()
+    )
+    # Format: [{"message": "Database timeout", "count": 150}, ...]
+    formatted_message_clusters = [{"message": msg, "count": count} for msg, count in message_clusters]
+
+    return {
+        "document_id": document_id,
+        "total_log_entries": total_entries,
+        "first_log_entry_at": first_log_time.isoformat() if first_log_time else None,
+        "last_log_entry_at": last_log_time.isoformat() if last_log_time else None,
+        "level_counts": formatted_level_counts,
+        "top_message_clusters": formatted_message_clusters,
+    }
+
+
+

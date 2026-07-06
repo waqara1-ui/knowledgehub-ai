@@ -2,34 +2,41 @@ from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, sta
 from fastapi.responses import JSONResponse
 from typing import Annotated, Optional
 import os
-import uuid #generates unique links?
+import uuid  # generates unique links?
 from datetime import datetime
-import re  #for log parsing
+import re  # for log parsing
 
 from database import engine, Base, get_database
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 import models
 
+from pypdf import PdfReader  # for PDF parsing
+
+# NEW IMPORTS FOR EMBEDDINGS
+from sentence_transformers import SentenceTransformer
+import json  # To store embeddings as JSON string in DB
+
 # Create all database tables defined in models.py
 # This will create the .db file and tables if they don't exist
 # In a real production app, you would use a migration tool like Alembic for this.
 Base.metadata.create_all(bind=engine)
 
-#creating an instance of FastAPI and assigning into app which is what Uvicorn will run
+# creating an instance of FastAPI and assigning into app which is what Uvicorn will run
 app = FastAPI(
     title="LogLens AI",
     description="AI-powered incident investigation and log analysis assistant.",
     version="0.1.0",
 )
 
-
-#ensuring upload directory exists
-UPLOAD_DIR = "uploaded_files" 
+# ensuring upload directory exists
+UPLOAD_DIR = "uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 DbSessionDep = Annotated[Session, Depends(get_database)]
-#Annotated[Session, Depends(get_db)] tells FastAPI: “this parameter is a Session and should be provided by get_database.
+# Annotated[Session, Depends(get_database)] tells FastAPI:
+# “this parameter is a Session and should be provided by get_database.”
+
 
 @app.get("/health")
 def health_check():
@@ -37,45 +44,49 @@ def health_check():
     Adding a health check endpoint to return a simple JSON response that indicates the service is running.
     This is useful for monitoring and uptime checks.
     """
-    
-    return {"status": "ok"} #: for JSONresponse
+    return {"status": "ok"}  # JSON response
+
 
 @app.get("/hello")
 def hello(name: str = "there"):
     """
-    Adding a simple ex. endpoint
-    Query Param: hello, reponse: "there!
-    Returns a JSON greeting
-    
+    Adding a simple example endpoint.
+    Query Param: name, response: "there" by default.
+    Returns a JSON greeting.
     """
     message = f"Hello, {name}! Welcome to the LogLens AI API."
     return JSONResponse(content={"message": message})
 
-#helper to detect file type
+
+# helper to detect file type
 def detect_document_type(file: UploadFile) -> str:
-    """file detection based on file extension
-    In a real system,we'd also inspectcontent signatures
+    """
+    File detection based on file extension.
+    In a real system, we'd also inspect content signatures (magic numbers).
     """
     filename = file.filename or ""
     lower_name = filename.lower()
 
-    if lower_name.endswith((".log", ".jsonl", ".ndjson")): # Common log extensions
+    # Common log extensions
+    if lower_name.endswith((".log", ".jsonl", ".ndjson")):
         return models.DocumentType.LOG
     if lower_name.endswith(".pdf"):
         return models.DocumentType.RUNBOOK
     if lower_name.endswith(".txt") or lower_name.endswith(".md"):
         return models.DocumentType.RUNBOOK
-    
+
     return models.DocumentType.OTHER
+
 
 # SECTION: Simple log line parser
 LOG_LINE_REGEX = re.compile(
     r"^(?P<timestamp>\S+)\s+(?P<level>[A-Z]+)\s+(?P<message>.+)$"
 )
 
-def parse_log_line(line:str) -> dict:
+
+def parse_log_line(line: str) -> dict:
     """
-    Parsing a single log line into structured data
+    Parsing a single log line into structured data.
     Expected format (simple style):
       2024-06-01T10:42:11Z INFO User 123 logged in
 
@@ -88,10 +99,10 @@ def parse_log_line(line:str) -> dict:
     line = line.strip()
     if not line:
         return {}
-    
+
     match = LOG_LINE_REGEX.match(line)
     if not match:
-        # If it doesn't match the simple pattern, 
+        # If it doesn't match the simple pattern,
         # treat the whole line as message
         return {
             "timestamp": None,
@@ -99,13 +110,15 @@ def parse_log_line(line:str) -> dict:
             "message": line,
             "raw": line,
         }
+
     ts_str = match.group("timestamp")
     level = match.group("level")
     message = match.group("message")
 
-    #parsing timestamp
+    # parsing timestamp
     ts = None
-    try: # to handle ISO 8601-like timestamps such as 2024-06-01T10:42:11Z
+    try:
+        # to handle ISO 8601-like timestamps such as 2024-06-01T10:42:11Z
         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except Exception:
         pass
@@ -117,6 +130,38 @@ def parse_log_line(line:str) -> dict:
         "raw": line,
     }
 
+
+# SECTION: Embedding Model Initialization
+# Global variable to hold the embedding model
+embedding_model: Optional[SentenceTransformer] = None
+
+
+def get_embedding_model() -> SentenceTransformer:
+    """
+    Lazy-load the SentenceTransformer model.
+    We only load it once and reuse it to avoid expensive reloads.
+    """
+    global embedding_model
+    if embedding_model is None:
+        # Load a small, fast model suitable for CPU and local development.
+        # This model is good for general-purpose sentence embeddings.
+        print("Loading SentenceTransformer model...")
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        print("Model loaded.")
+    return embedding_model
+
+
+def generate_embedding(text: str) -> list[float]:
+    """
+    Generates an embedding vector (list of floats) for a given text.
+    """
+    model = get_embedding_model()
+    # Encode the text to get its embedding
+    embedding = model.encode(text)
+    # Convert numpy array to list for JSON serialization and database storage
+    return embedding.tolist()
+
+
 @app.post("/admin/upload", status_code=status.HTTP_201_CREATED)
 async def upload_document(
     title: Annotated[str, Form(...)] ,
@@ -126,8 +171,8 @@ async def upload_document(
     """
     Admin endpoint to upload a file.
 
-    - For log files (.log): parses lines into LogEntry records.
-    - For runbooks/docs (pdf/txt/md): saving metadata for later chunking/embedding.
+    - For log files (.log/.jsonl/.ndjson): parses lines into LogEntry records.
+    - For runbooks/docs (pdf/txt/md): parses text, chunks it, and generates embeddings for each chunk.
     """
 
     if not file.filename:
@@ -142,7 +187,7 @@ async def upload_document(
     if doc_type not in (models.DocumentType.LOG, models.DocumentType.RUNBOOK):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Please upload .log, .pdf, .txt, or .md files.",
+            detail="Unsupported file type. Please upload .log, .jsonl, .ndjson, .pdf, .txt, or .md files.",
         )
 
     # Generating safe unique filename
@@ -165,7 +210,7 @@ async def upload_document(
     # Fake uploader for now
     fake_uploader_id: Optional[int] = 1
 
-    # Create Document
+    # Create Document record with initial status
     document = models.Document(
         title=title,
         file_path=file_path,
@@ -176,6 +221,8 @@ async def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
+
+    # --- Document Type Specific Processing ---
 
     # If it's a log file, parse into LogEntry
     if doc_type == models.DocumentType.LOG:
@@ -221,9 +268,65 @@ async def upload_document(
             "log_entries_created": created_count,
         }
 
-    # If it's a runbook/doc, we only save metadata for now
-    else:
-        document.status = "processed"  # Metadata saved; text/chunking will come later
+    # If it's a runbook/doc, parse text, chunk, and embed
+    elif doc_type == models.DocumentType.RUNBOOK:
+        full_text = ""
+        try:
+            # Check file extension before trying pypdf
+            if file_extension.lower() == ".pdf":
+                reader = PdfReader(file_path)
+                for page_num, page in enumerate(reader.pages):
+                    extracted = page.extract_text() or ""
+                    full_text += extracted + "\n"
+            else:  # For .txt, .md, etc., just read the raw file
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    full_text = f.read()
+
+        except Exception as e:
+            document.status = "failed"
+            db.add(document)
+            db.commit()
+            os.remove(file_path)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to parse document content: {e}",
+            )
+
+        # Simple chunking strategy for now: split by double newline and filter empty chunks
+        raw_chunks = [chunk.strip() for chunk in full_text.split("\n\n") if chunk.strip()]
+
+        if not raw_chunks and full_text.strip():
+            raw_chunks = [full_text.strip()]
+        elif not raw_chunks:
+            document.status = "failed"
+            db.add(document)
+            db.commit()
+            os.remove(file_path)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Document contains no extractable text content.",
+            )
+
+        document_chunks = []
+        for i, chunk_text in enumerate(raw_chunks):
+            # Limit chunk size for demonstration
+            if len(chunk_text) > 2000:
+                chunk_text = chunk_text[:2000] + "..."  # Truncate and add ellipsis
+
+            # Generate embedding for the chunk
+            chunk_embedding = generate_embedding(chunk_text)
+
+            db_chunk = models.DocumentChunk(
+                document_id=document.id,
+                chunk_text=chunk_text,
+                chunk_order=i,
+                # Store embedding as a JSON string for now
+                embedding=json.dumps(chunk_embedding),
+            )
+            document_chunks.append(db_chunk)
+
+        db.add_all(document_chunks)
+        document.status = "processed"
         db.add(document)
         db.commit()
         db.refresh(document)
@@ -233,8 +336,20 @@ async def upload_document(
             "title": document.title,
             "type": document.type,
             "status": document.status,
-            "message": "Runbook/document uploaded. Text parsing/chunking will be added in a later phase.",
+            "chunk_count": len(document_chunks),
+            "message": "Runbook/document uploaded, parsed, chunked, and embeddings generated.",
         }
+
+    # Should not happen due to prior type check, but here for safety
+    else:
+        document.status = "failed"
+        db.add(document)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected document type encountered.",
+        )
+
 
 @app.get("/logs/{document_id}/summary", response_model=dict)
 def get_log_summary(document_id: int, db: DbSessionDep):
@@ -247,27 +362,28 @@ def get_log_summary(document_id: int, db: DbSessionDep):
     - Clustered common messages (top N most frequent messages)
     - Time range of logs
     """
-    #Verifying document exists and is a log file
+    # Verifying document exists and is a log file
     document = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     if document.type != models.DocumentType.LOG:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document is not a log file.")
-    
-    # 2. Get basic counts and time range
+
+    # 1. Basic count
     total_entries = db.query(models.LogEntry).filter(models.LogEntry.document_id == document_id).count()
 
-
-    # Get min/max timestamps for the log entries
-    time_range = db.query(
-        func.min(models.LogEntry.timestamp),
-        func.max(models.LogEntry.timestamp)
-    ).filter(models.LogEntry.document_id == document_id).first()
-
+    # 2. Get min/max timestamps for the log entries
+    time_range = (
+        db.query(
+            func.min(models.LogEntry.timestamp),
+            func.max(models.LogEntry.timestamp),
+        )
+        .filter(models.LogEntry.document_id == document_id)
+        .first()
+    )
     first_log_time, last_log_time = time_range if time_range else (None, None)
 
-     # 3. Count by log level
-    # This groups by the 'level' column and counts occurrences
+    # 3. Count by log level
     level_counts = (
         db.query(models.LogEntry.level, func.count(models.LogEntry.id))
         .filter(models.LogEntry.document_id == document_id)
@@ -278,17 +394,19 @@ def get_log_summary(document_id: int, db: DbSessionDep):
 
     # Format: {"INFO": 100, "ERROR": 20, "WARN": 5}
     formatted_level_counts = {level: count for level, count in level_counts if level is not None}
-    if None in [lc[0] for lc in level_counts]: # Include entries without a recognized level
-        formatted_level_counts["UNKNOWN_LEVEL"] = next((lc[1] for lc in level_counts if lc[0] is None), 0)
+    # Include entries without a recognized level
+    if None in [lc[0] for lc in level_counts]:
+        formatted_level_counts["UNKNOWN_LEVEL"] = next(
+            (lc[1] for lc in level_counts if lc[0] is None), 0
+        )
 
     # 4. Cluster common messages (top N)
-    # This groups by the 'message' column and counts occurrences
     message_clusters = (
         db.query(models.LogEntry.message, func.count(models.LogEntry.id))
         .filter(models.LogEntry.document_id == document_id)
         .group_by(models.LogEntry.message)
         .order_by(func.count(models.LogEntry.id).desc())
-        .limit(10) # Get top 10 most frequent messages
+        .limit(10)  # Get top 10 most frequent messages
         .all()
     )
     # Format: [{"message": "Database timeout", "count": 150}, ...]
@@ -302,6 +420,3 @@ def get_log_summary(document_id: int, db: DbSessionDep):
         "level_counts": formatted_level_counts,
         "top_message_clusters": formatted_message_clusters,
     }
-
-
-

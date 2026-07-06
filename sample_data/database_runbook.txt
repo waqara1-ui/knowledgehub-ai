@@ -1,0 +1,9 @@
+Database Runbook
+
+If the application shows database timeout errors, first check the database connection pool.
+
+If the connection pool is exhausted, restart the API service and worker service.
+
+After restarting the service, verify database connectivity and check whether Redis is responding.
+
+If errors continue, review recent deployments and rollback the latest release if needed.

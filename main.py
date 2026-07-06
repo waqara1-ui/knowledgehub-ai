@@ -37,7 +37,6 @@ DbSessionDep = Annotated[Session, Depends(get_database)]
 # Annotated[Session, Depends(get_database)] tells FastAPI:
 # “this parameter is a Session and should be provided by get_database.”
 
-
 @app.get("/health")
 def health_check():
     """
@@ -45,7 +44,6 @@ def health_check():
     This is useful for monitoring and uptime checks.
     """
     return {"status": "ok"}  # JSON response
-
 
 @app.get("/hello")
 def hello(name: str = "there"):
@@ -160,6 +158,36 @@ def generate_embedding(text: str) -> list[float]:
     embedding = model.encode(text)
     # Convert numpy array to list for JSON serialization and database storage
     return embedding.tolist()
+
+# SECTION: Cosine similarity helper for vector search
+#phase 3 function
+def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    """
+    Computes cosine similarity between two vectors.
+
+    Cosine similarity measures how close two vectors are in direction.
+    1.0 -> identical direction (very similar)
+    0.0 -> orthogonal (unrelated)
+    -1.0 -> opposite direction
+
+    We assume both vectors are non-empty and of the same length.
+    """
+    if not vec_a or not vec_b:
+        return 0.0
+
+    # Compute dot product and magnitudes
+    dot = 0.0
+    mag_a = 0.0
+    mag_b = 0.0
+    for a, b in zip(vec_a, vec_b):
+        dot += a * b
+        mag_a += a * a
+        mag_b += b * b
+
+    if mag_a == 0.0 or mag_b == 0.0:
+        return 0.0
+
+    return dot / ((mag_a ** 0.5) * (mag_b ** 0.5))
 
 
 @app.post("/admin/upload", status_code=status.HTTP_201_CREATED)
@@ -420,3 +448,82 @@ def get_log_summary(document_id: int, db: DbSessionDep):
         "level_counts": formatted_level_counts,
         "top_message_clusters": formatted_message_clusters,
     }
+
+#phase 3
+@app.get("/search/runbooks", response_model=dict)
+def search_runbooks(query: str, db: DbSessionDep, top_k: int = 5):
+    """
+    Semantic search over runbook/document chunks.
+
+    Steps:
+    - Embedding the query using the same embedding model.
+    - Load all DocumentChunk embeddings for RUNBOOK documents.
+    - Computing cosine similarity between query embedding and each chunk embedding.
+    - Sorting by similarity and returning the top_k matches.
+
+    Query parameters:
+    - query: the natural language question or phrase.
+    - top_k: how many top results to return (default: 5).
+    """
+    if not query.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query must not be empty.",
+        )
+
+    # 1. Generate embedding for the query
+    query_embedding = generate_embedding(query)
+
+    # 2. Load all chunks for documents of type RUNBOOK that have embeddings
+    # Join DocumentChunk with Document to filter only RUNBOOK-type documents
+    chunks_with_docs = (
+        db.query(models.DocumentChunk, models.Document)
+        .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
+        .filter(
+            models.Document.type == models.DocumentType.RUNBOOK,
+            models.DocumentChunk.embedding.isnot(None),
+        )
+        .all()
+    )
+
+    if not chunks_with_docs:
+        return {
+            "query": query,
+            "results": [],
+            "message": "No runbook/document chunks with embeddings found.",
+        }
+
+    # 3. Compute similarity with each chunk
+    scored_results = []
+    for chunk, document in chunks_with_docs:
+        try:
+            # embedding is stored as JSON string, so we parse it
+            chunk_embedding = json.loads(chunk.embedding)
+        except Exception:
+            # If parsing fails for some reason, skip this chunk
+            continue
+
+        sim = cosine_similarity(query_embedding, chunk_embedding)
+
+        scored_results.append(
+            {
+                "similarity": sim,
+                "chunk_id": chunk.id,
+                "document_id": document.id,
+                "document_title": document.title,
+                "chunk_order": chunk.chunk_order,
+                "chunk_text": chunk.chunk_text,
+            }
+        )
+
+    # 4. Sort by similarity (highest first) and take top_k
+    scored_results.sort(key=lambda item: item["similarity"], reverse=True)
+    top_results = scored_results[: top_k]
+
+    return {
+        "query": query,
+        "top_k": top_k,
+        "result_count": len(top_results),
+        "results": top_results,
+    }
+

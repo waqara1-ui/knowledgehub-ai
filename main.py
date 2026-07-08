@@ -16,6 +16,7 @@ from pypdf import PdfReader  # for PDF parsing
 # NEW IMPORTS FOR EMBEDDINGS
 from sentence_transformers import SentenceTransformer
 import json  # To store embeddings as JSON string in DB
+import asyncio
 
 # Create all database tables defined in models.py
 # This will create the .db file and tables if they don't exist
@@ -55,6 +56,66 @@ def hello(name: str = "there"):
     message = f"Hello, {name}! Welcome to the LogLens AI API."
     return JSONResponse(content={"message": message})
 
+# main.py (add this somewhere with your other API endpoints, e.g., after /hello)
+
+@app.post("/debug/create-user", status_code=status.HTTP_201_CREATED)
+def create_debug_user(db: DbSessionDep):
+    """
+    DEBUG ENDPOINT: Creates a dummy user for testing purposes.
+    Sets ID to 1. REMOVE THIS IN PRODUCTION.
+    """
+    # Check if a user with id=1 already exists
+    existing_user = db.query(models.User).filter(models.User.id == 1).first()
+    if existing_user:
+        return {"message": "Debug user (ID 1) already exists.", "user_id": existing_user.id}
+
+    # Create a new user with ID 1
+    new_user = models.User(
+        id=1, # Explicitly set ID for testing
+        username="debug_user",
+        email="debug@example.com",
+        hashed_password="not_a_real_password_hash", # Placeholder password
+        is_admin=True,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "Debug user created successfully.", "user_id": new_user.id}
+
+# main.py (add this right after create_debug_user)
+
+@app.post("/debug/create-incident", status_code=status.HTTP_201_CREATED)
+def create_debug_incident(db: DbSessionDep):
+    """
+    DEBUG ENDPOINT: Creates a dummy incident for testing purposes.
+    Sets ID to 1 and links to User ID 1. REMOVE THIS IN PRODUCTION.
+    """
+    # Check if an incident with id=1 already exists
+    existing_incident = db.query(models.Incident).filter(models.Incident.id == 1).first()
+    if existing_incident:
+        return {"message": "Debug incident (ID 1) already exists.", "incident_id": existing_incident.id}
+
+    # IMPORTANT: Ensure User ID 1 exists before creating incident
+    existing_user = db.query(models.User).filter(models.User.id == 1).first()
+    if not existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="User with ID 1 must exist before creating a debug incident. Please run /debug/create-user first."
+        )
+
+    # Create a new incident with ID 1
+    new_incident = models.Incident(
+        id=1, # Explicitly set ID for testing
+        title="Debug Test Incident",
+        description="A temporary incident for RAG feature testing.",
+        status=models.IncidentStatus.OPEN,
+        severity="SEV-3",
+        creator_id=1, # Link to our debug_user
+    )
+    db.add(new_incident)
+    db.commit()
+    db.refresh(new_incident)
+    return {"message": "Debug incident created successfully.", "incident_id": new_incident.id}
 
 # helper to detect file type
 def detect_document_type(file: UploadFile) -> str:
@@ -527,3 +588,159 @@ def search_runbooks(query: str, db: DbSessionDep, top_k: int = 5):
         "results": top_results,
     }
 
+# main.py (add after generate_embedding and cosine_similarity)
+
+# ... (your generate_embedding and cosine_similarity functions) ...
+
+# SECTION: Mock LLM for RAG (Placeholder for actual LLM integration)
+async def mock_llm_generate(prompt: str) -> str:
+    """
+    A placeholder function that simulates an LLM generating a response.
+    In a real application, this would call a service like Google Gemini, OpenAI GPT, etc.
+    """
+    print(f"Mock LLM received prompt:\n{prompt[:500]}...") # Print first 500 chars of prompt
+    
+    # Simulate thinking time
+    await asyncio.sleep(0.1) 
+
+    if "database timeout" in prompt.lower() and "connection pool" in prompt.lower():
+        return "Based on the provided context, a common cause for database timeouts is connection pool exhaustion. Consider increasing the connection pool size or restarting the affected services."
+    elif "restart" in prompt.lower() and "service" in prompt.lower():
+        return "The context suggests that restarting the relevant service is a common troubleshooting step for many issues."
+    elif "no extractable text" in prompt.lower():
+        return "The document indicates it contains no extractable text, suggesting it might be an image-only PDF or corrupted."
+    else:
+        return "Based on the provided context, I can give a general answer. To solve the issue, you should review logs and documentation for specific steps."
+
+
+# main.py (add after your search_runbooks endpoint)
+
+# SECTION: RAG Endpoint for Incident Investigation
+@app.post("/incidents/{incident_id}/ask", response_model=dict)
+async def ask_incident_assistant(
+    incident_id: int,
+    question: Annotated[str, Form(...)],
+    db: DbSessionDep,
+    top_k_chunks: int = 5,
+):
+    """
+    Ask the AI assistant a question about a specific incident,
+    using RAG over runbook chunks to generate a grounded answer.
+
+    Steps:
+    1. Verify incident exists. (Currently, we don't use log entries in RAG here yet).
+    2. Semantically search runbook chunks using the question.
+    3. Construct a prompt for the LLM with the question and retrieved context.
+    4. Call the LLM (mock for now) to generate an answer.
+    5. Return the answer with citations.
+
+    Path parameters:
+    - incident_id: The ID of the incident to ask about (for future context/linking).
+
+    Form parameters:
+    - question: The natural language question to ask the assistant.
+    - top_k_chunks: Number of most relevant runbook chunks to retrieve for context (default: 5).
+    """
+
+    # 1. Verify incident exists (and is 'open' or 'investigating')
+    incident = db.query(models.Incident).filter(models.Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found.")
+    
+    if not question.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Question cannot be empty.",
+        )
+
+    # 2. Perform semantic search to retrieve relevant runbook chunks
+    # (Reusing logic from search_runbooks, but directly within this function)
+    query_embedding = generate_embedding(question)
+
+    chunks_with_docs = (
+        db.query(models.DocumentChunk, models.Document)
+        .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
+        .filter(
+            models.Document.type == models.DocumentType.RUNBOOK,
+            models.DocumentChunk.embedding.isnot(None),
+        )
+        .all()
+    )
+
+    if not chunks_with_docs:
+        # If no runbook chunks are available, we can still ask the LLM, but it won't be grounded.
+        # For now, we'll return a specific message.
+        return {
+            "incident_id": incident_id,
+            "question": question,
+            "answer": "I cannot provide a grounded answer as no runbook documents or relevant chunks with embeddings were found.",
+            "citations": [],
+            "message": "No relevant runbook context available.",
+        }
+
+    scored_results = []
+    for chunk, document in chunks_with_docs:
+        try:
+            chunk_embedding = json.loads(chunk.embedding)
+        except Exception:
+            continue # Skip if embedding is malformed
+
+        sim = cosine_similarity(query_embedding, chunk_embedding)
+        scored_results.append(
+            {
+                "similarity": sim,
+                "chunk_id": chunk.id,
+                "document_id": document.id,
+                "document_title": document.title,
+                "chunk_order": chunk.chunk_order,
+                "chunk_text": chunk.chunk_text,
+            }
+        )
+    scored_results.sort(key=lambda item: item["similarity"], reverse=True)
+    
+    # Take the top_k_chunks as context
+    relevant_chunks = scored_results[:top_k_chunks]
+
+    # 3. Construct the prompt for the LLM
+    context_text = "\n\n".join(
+        [f"Document: {c['document_title']}\nChunk Order: {c['chunk_order']}\nContent: {c['chunk_text']}" for c in relevant_chunks if c["similarity"] > 0.7] # Only use chunks above a certain similarity threshold
+    )
+
+    if not context_text:
+        # If no chunks passed the similarity threshold
+        answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge:")
+        return {
+            "incident_id": incident_id,
+            "question": question,
+            "answer": answer,
+            "citations": [],
+            "message": "Answer based on general knowledge as no highly relevant runbook context was found.",
+        }
+
+
+    prompt = (
+        "You are an expert incident response assistant. "
+        "Answer the following question based ONLY on the provided context from engineering runbooks. "
+        "If the answer is not in the context, state that you cannot answer from the provided information. "
+        "Cite the document title and chunk order for each piece of information you use.\n\n"
+        f"Question: {question}\n\n"
+        f"Context:\n{context_text}\n\n"
+        "Answer:"
+    )
+
+    # 4. Call the LLM to generate an answer
+    ai_answer = await mock_llm_generate(prompt)
+
+    # 5. Prepare citations
+    citations = [
+        {"document_id": c["document_id"], "document_title": c["document_title"], "chunk_id": c["chunk_id"], "chunk_order": c["chunk_order"], "similarity": c["similarity"]}
+        for c in relevant_chunks if c["similarity"] > 0.7 # Only cite chunks used for context
+    ]
+
+    return {
+        "incident_id": incident_id,
+        "question": question,
+        "answer": ai_answer,
+        "citations": citations,
+        "message": "Answer generated using RAG with runbook context."
+    }

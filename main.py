@@ -18,6 +18,16 @@ from sentence_transformers import SentenceTransformer
 import json  # To store embeddings as JSON string in DB
 import asyncio
 
+#NEW IMPORTS FOR SECURITY
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import timedelta, datetime, timezone # For token expiration
+
+SECRET_KEY = "KEY_PASSOWRD_131" # CHANGE THIS IN PRODUCTION!
+ALGORITHM = "HS256" # Hashing algorithm for JWT
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 # Token expires in 60 minutes
+
+
 # Create all database tables defined in models.py
 # This will create the .db file and tables if they don't exist
 # In a real production app, you would use a migration tool like Alembic for this.
@@ -613,7 +623,63 @@ async def mock_llm_generate(prompt: str) -> str:
         return "Based on the provided context, I can give a general answer. To solve the issue, you should review logs and documentation for specific steps."
 
 
-# main.py (add after your search_runbooks endpoint)
+
+# SECTION: Password Hashing Utilities (NEW)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Checks if a plain-text password matches a hashed password.
+    """
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """
+    Hashes a plain-text password.
+    """
+    return pwd_context.hash(password)
+
+# SECTION: JWT Token Utilities (NEW)
+def create_access_token(
+    data: dict,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """
+    Creates a signed JWT access token.
+
+    - data: dictionary of claims to embed in the token (e.g. {"sub": username, "user_id": 1})
+    - expires_delta: optional timedelta for custom expiration; if not provided,
+      ACCESS_TOKEN_EXPIRE_MINUTES is used.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("data passed to create_access_token must be a dict")
+
+    # Copy the input data so we don't accidentally mutate the caller's dictionary
+    to_encode = data.copy()
+
+    # Compute expiry time
+    if expires_delta is not None:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode["exp"] = expire
+
+    # Encode and sign the token using our SECRET_KEY and ALGORITHM
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decodes a JWT access token and returns its payload (data).
+    Raises JWTError if the token is invalid or expired.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
 
 # SECTION: RAG Endpoint for Incident Investigation
 @app.post("/incidents/{incident_id}/ask", response_model=dict)

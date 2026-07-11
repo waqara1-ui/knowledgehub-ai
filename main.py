@@ -23,6 +23,10 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import timedelta, datetime, timezone # For token expiration
 
+from pydantic import BaseModel, EmailStr
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+
 SECRET_KEY = "KEY_PASSOWRD_131" # CHANGE THIS IN PRODUCTION!
 ALGORITHM = "HS256" # Hashing algorithm for JWT
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 # Token expires in 60 minutes
@@ -48,6 +52,24 @@ DbSessionDep = Annotated[Session, Depends(get_database)]
 # Annotated[Session, Depends(get_database)] tells FastAPI:
 # “this parameter is a Session and should be provided by get_database.”
 
+# SECTION: Pydantic Schemas (for requests/responses)
+
+class UserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 @app.get("/health")
 def health_check():
     """
@@ -66,7 +88,209 @@ def hello(name: str = "there"):
     message = f"Hello, {name}! Welcome to the LogLens AI API."
     return JSONResponse(content={"message": message})
 
-# main.py (add this somewhere with your other API endpoints, e.g., after /hello)
+# SECTION: Password Hashing Utilities (NEW)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Checks if a plain-text password matches a hashed password.
+    """
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """
+    Hashes a plain-text password.
+    """
+    return pwd_context.hash(password)
+
+# SECTION: JWT Token Utilities (NEW)
+def create_access_token(
+    data: dict,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """
+    Creates a signed JWT access token.
+
+    - data: dictionary of claims to embed in the token (e.g. {"sub": username, "user_id": 1})
+    - expires_delta: optional timedelta for custom expiration; if not provided,
+      ACCESS_TOKEN_EXPIRE_MINUTES is used.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("data passed to create_access_token must be a dict")
+
+    # Copy the input data so we don't accidentally mutate the caller's dictionary
+    to_encode = data.copy()
+
+    # Compute expiry time
+    if expires_delta is not None:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode["exp"] = expire
+
+    # Encode and sign the token using our SECRET_KEY and ALGORITHM
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decodes a JWT access token and returns its payload (data).
+    Raises JWTError if the token is invalid or expired.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+
+# SECTION: Bearer Token / Current User Dependencies
+
+bearer_scheme = HTTPBearer()
+
+
+def get_user_by_username(db: Session, username: str) -> Optional[models.User]:
+    return db.query(models.User).filter(models.User.username == username).first()
+
+
+def get_user_by_id(db: Session, user_id: int) -> Optional[models.User]:
+    return db.query(models.User).filter(models.User.id == user_id).first()
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    db: DbSessionDep,
+) -> models.User:
+    """
+    Extracts the current user from the JWT access token.
+    Raises 401 if the token is invalid or user does not exist.
+    """
+    token = credentials.credentials
+
+    try:
+        payload = decode_access_token(token)
+    except HTTPException:
+        # normalize as 401 with proper header
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    username: str | None = payload.get("sub")
+    user_id: int | None = payload.get("user_id")
+
+    if username is None or user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = get_user_by_id(db, user_id)
+    if user is None or user.username != username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
+async def get_current_admin(
+    current_user: Annotated[models.User, Depends(get_current_user)],
+) -> models.User:
+    """
+    Ensures that the current user is an admin.
+    Raises 403 if not.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions (admin required)",
+        )
+    return current_user
+
+
+# SECTION: Auth Endpoints
+@app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
+def signup(user_data: UserCreate, db: DbSessionDep):
+    """
+    Create a new user account.
+
+    NOTE: For now, this is open; in a real company this would be restricted
+    (e.g., only admins can create users, or via SSO).
+    """
+    # Check if username or email already exists
+    existing_user = (
+        db.query(models.User)
+        .filter(
+            (models.User.username == user_data.username)
+            | (models.User.email == user_data.email)
+        )
+        .first()
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username or email already registered.",
+        )
+
+    hashed_password = get_password_hash(user_data.password)
+
+    new_user = models.User(
+        username=user_data.username,
+        email=user_data.email,
+        hashed_password=hashed_password,
+        is_admin=False,  # default new users to non-admin
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "id": new_user.id,
+        "username": new_user.username,
+        "email": new_user.email,
+        "is_admin": new_user.is_admin,
+        "message": "User created successfully.",
+    }
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(form_data: UserLogin, db: DbSessionDep):
+    """
+    Log in a user and return a JWT access token.
+
+    In a more 'OAuth2' style implementation, you'd accept form-encoded data using
+    OAuth2PasswordRequestForm, but here we keep it simple with JSON.
+    """
+    user = get_user_by_username(db, form_data.username)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password.",
+        )
+
+    if not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password.",
+        )
+
+    # Create token payload; sub = subject (standard JWT claim)
+    token_data = {
+        "sub": user.username,
+        "user_id": user.id,
+        "is_admin": user.is_admin,
+    }
+
+    access_token = create_access_token(data=token_data)
+
+    return TokenResponse(access_token=access_token)
 
 @app.post("/debug/create-user", status_code=status.HTTP_201_CREATED)
 def create_debug_user(db: DbSessionDep):
@@ -84,7 +308,7 @@ def create_debug_user(db: DbSessionDep):
         id=1, # Explicitly set ID for testing
         username="debug_user",
         email="debug@example.com",
-        hashed_password="not_a_real_password_hash", # Placeholder password
+        hashed_password=get_password_hash("not_a_real_password_hash"), # Store a valid bcrypt hash
         is_admin=True,
     )
     db.add(new_user)
@@ -266,7 +490,8 @@ async def upload_document(
     title: Annotated[str, Form(...)] ,
     file: Annotated[UploadFile, File(...)] ,
     db: DbSessionDep,
-):
+    current_admin: Annotated[models.User, Depends(get_current_admin)],
+    ):
     """
     Admin endpoint to upload a file.
 
@@ -306,16 +531,13 @@ async def upload_document(
             detail=f"Failed to save file: {e}",
         )
 
-    # Fake uploader for now
-    fake_uploader_id: Optional[int] = 1
-
     # Create Document record with initial status
     document = models.Document(
         title=title,
         file_path=file_path,
         type=doc_type,
         status="processing",
-        uploader_id=fake_uploader_id,
+        uploader_id=current_admin.id,
     )
     db.add(document)
     db.commit()
@@ -621,64 +843,6 @@ async def mock_llm_generate(prompt: str) -> str:
         return "The document indicates it contains no extractable text, suggesting it might be an image-only PDF or corrupted."
     else:
         return "Based on the provided context, I can give a general answer. To solve the issue, you should review logs and documentation for specific steps."
-
-
-
-# SECTION: Password Hashing Utilities (NEW)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Checks if a plain-text password matches a hashed password.
-    """
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    """
-    Hashes a plain-text password.
-    """
-    return pwd_context.hash(password)
-
-# SECTION: JWT Token Utilities (NEW)
-def create_access_token(
-    data: dict,
-    expires_delta: Optional[timedelta] = None,
-) -> str:
-    """
-    Creates a signed JWT access token.
-
-    - data: dictionary of claims to embed in the token (e.g. {"sub": username, "user_id": 1})
-    - expires_delta: optional timedelta for custom expiration; if not provided,
-      ACCESS_TOKEN_EXPIRE_MINUTES is used.
-    """
-    if not isinstance(data, dict):
-        raise ValueError("data passed to create_access_token must be a dict")
-
-    # Copy the input data so we don't accidentally mutate the caller's dictionary
-    to_encode = data.copy()
-
-    # Compute expiry time
-    if expires_delta is not None:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    to_encode["exp"] = expire
-
-    # Encode and sign the token using our SECRET_KEY and ALGORITHM
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def decode_access_token(token: str) -> dict:
-    """
-    Decodes a JWT access token and returns its payload (data).
-    Raises JWTError if the token is invalid or expired.
-    """
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
 
 # SECTION: RAG Endpoint for Incident Investigation

@@ -69,6 +69,10 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+class AnswerFeedbackSubmit(BaseModel):
+    question_log_id: int
+    is_helpful: bool
+    feedback_text: Optional[str] = None
 
 @app.get("/health")
 def health_check():
@@ -851,28 +855,9 @@ async def ask_incident_assistant(
     incident_id: int,
     question: Annotated[str, Form(...)],
     db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
     top_k_chunks: int = 5,
 ):
-    """
-    Ask the AI assistant a question about a specific incident,
-    using RAG over runbook chunks to generate a grounded answer.
-
-    Steps:
-    1. Verify incident exists. (Currently, we don't use log entries in RAG here yet).
-    2. Semantically search runbook chunks using the question.
-    3. Construct a prompt for the LLM with the question and retrieved context.
-    4. Call the LLM (mock for now) to generate an answer.
-    5. Return the answer with citations.
-
-    Path parameters:
-    - incident_id: The ID of the incident to ask about (for future context/linking).
-
-    Form parameters:
-    - question: The natural language question to ask the assistant.
-    - top_k_chunks: Number of most relevant runbook chunks to retrieve for context (default: 5).
-    """
-
-    # 1. Verify incident exists (and is 'open' or 'investigating')
     incident = db.query(models.Incident).filter(models.Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found.")
@@ -882,11 +867,20 @@ async def ask_incident_assistant(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Question cannot be empty.",
         )
+    
+    # Log the question asked for analytics (before AI answer)
+    question_log = models.QuestionLog(
+        incident_id=incident_id,
+        user_id=current_user.id,
+        question=question,
+        # ai_answer will be updated after LLM call
+    )
+    db.add(question_log)
+    db.commit() # Commit to get question_log.id for potential error tracking later
+    db.refresh(question_log)
 
-    # 2. Perform semantic search to retrieve relevant runbook chunks
-    # (Reusing logic from search_runbooks, but directly within this function)
+    # --- (Semantic search, prompt construction, etc. - UNCHANGED from previous step) ---
     query_embedding = generate_embedding(question)
-
     chunks_with_docs = (
         db.query(models.DocumentChunk, models.Document)
         .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
@@ -898,56 +892,57 @@ async def ask_incident_assistant(
     )
 
     if not chunks_with_docs:
-        # If no runbook chunks are available, we can still ask the LLM, but it won't be grounded.
-        # For now, we'll return a specific message.
+        ai_answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge (no context):")
+        
+        # Update question_log with answer even if no context
+        question_log.ai_answer = ai_answer
+        db.add(question_log)
+        db.commit()
+        db.refresh(question_log)
+
         return {
             "incident_id": incident_id,
+            "question_log_id": question_log.id,
             "question": question,
-            "answer": "I cannot provide a grounded answer as no runbook documents or relevant chunks with embeddings were found.",
+            "answer": ai_answer,
             "citations": [],
-            "message": "No relevant runbook context available.",
+            "message": "Answer based on general knowledge as no runbook documents or highly relevant chunks were found.",
         }
 
     scored_results = []
     for chunk, document in chunks_with_docs:
-        try:
-            chunk_embedding = json.loads(chunk.embedding)
-        except Exception:
-            continue # Skip if embedding is malformed
-
+        try: chunk_embedding = json.loads(chunk.embedding)
+        except Exception: continue
         sim = cosine_similarity(query_embedding, chunk_embedding)
         scored_results.append(
-            {
-                "similarity": sim,
-                "chunk_id": chunk.id,
-                "document_id": document.id,
-                "document_title": document.title,
-                "chunk_order": chunk.chunk_order,
-                "chunk_text": chunk.chunk_text,
-            }
+            {"similarity": sim, "chunk_id": chunk.id, "document_id": document.id,
+             "document_title": document.title, "chunk_order": chunk.chunk_order, "chunk_text": chunk.chunk_text,}
         )
     scored_results.sort(key=lambda item: item["similarity"], reverse=True)
-    
-    # Take the top_k_chunks as context
     relevant_chunks = scored_results[:top_k_chunks]
 
-    # 3. Construct the prompt for the LLM
     context_text = "\n\n".join(
-        [f"Document: {c['document_title']}\nChunk Order: {c['chunk_order']}\nContent: {c['chunk_text']}" for c in relevant_chunks if c["similarity"] > 0.7] # Only use chunks above a certain similarity threshold
+        [f"Document: {c['document_title']}\nChunk Order: {c['chunk_order']}\nContent: {c['chunk_text']}" for c in relevant_chunks if c["similarity"] > 0.7]
     )
 
     if not context_text:
-        # If no chunks passed the similarity threshold
-        answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge:")
+        ai_answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge (no context passed threshold):")
+        
+        # Update question_log with answer
+        question_log.ai_answer = ai_answer
+        db.add(question_log)
+        db.commit()
+        db.refresh(question_log)
+
         return {
             "incident_id": incident_id,
+            "question_log_id": question_log.id,
             "question": question,
-            "answer": answer,
+            "answer": ai_answer,
             "citations": [],
             "message": "Answer based on general knowledge as no highly relevant runbook context was found.",
         }
-
-
+    
     prompt = (
         "You are an expert incident response assistant. "
         "Answer the following question based ONLY on the provided context from engineering runbooks. "
@@ -957,20 +952,67 @@ async def ask_incident_assistant(
         f"Context:\n{context_text}\n\n"
         "Answer:"
     )
-
-    # 4. Call the LLM to generate an answer
+    
     ai_answer = await mock_llm_generate(prompt)
 
-    # 5. Prepare citations
+    # NEW: Update the question_log with the actual AI answer
+    question_log.ai_answer = ai_answer
+    db.add(question_log)
+    db.commit()
+    db.refresh(question_log)
+
     citations = [
         {"document_id": c["document_id"], "document_title": c["document_title"], "chunk_id": c["chunk_id"], "chunk_order": c["chunk_order"], "similarity": c["similarity"]}
-        for c in relevant_chunks if c["similarity"] > 0.7 # Only cite chunks used for context
+        for c in relevant_chunks if c["similarity"] > 0.7
     ]
 
     return {
         "incident_id": incident_id,
+        "question_log_id": question_log.id,
         "question": question,
         "answer": ai_answer,
         "citations": citations,
         "message": "Answer generated using RAG with runbook context."
+    }
+
+@app.post("/feedback", status_code=status.HTTP_201_CREATED)
+def submit_answer_feedback(
+    feedback_data: AnswerFeedbackSubmit,
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+):
+    """
+    Allows users to submit feedback on an AI-generated answer,
+    linking it directly to a specific question log entry.
+    """
+    # 1. Retrieve the original question log entry
+    question_log_entry = db.query(models.QuestionLog).filter(
+        models.QuestionLog.id == feedback_data.question_log_id
+    ).first()
+
+    if not question_log_entry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Question log entry with ID {feedback_data.question_log_id} not found."
+        )
+    
+    # 2. Create feedback record
+    new_feedback = models.AnswerFeedback(
+        incident_id=question_log_entry.incident_id, # Link to the incident from the log
+        user_id=current_user.id, # The user submitting feedback
+        question=question_log_entry.question, # The original question
+        answer=question_log_entry.ai_answer, # The AI's full answer from the log
+        is_helpful=feedback_data.is_helpful,
+        feedback_text=feedback_data.feedback_text,
+    )
+
+    db.add(new_feedback)
+    db.commit()
+    db.refresh(new_feedback)
+
+    return {
+        "feedback_id": new_feedback.id,
+        "question_log_id": question_log_entry.id,
+        "message": "Feedback submitted successfully.",
+        "is_helpful": new_feedback.is_helpful,
     }

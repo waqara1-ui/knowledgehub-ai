@@ -166,3 +166,42 @@ class LogEntry(Base):
     # Relationships
     document = relationship("Document", back_populates="log_entries")
     incident = relationship("Incident", back_populates="log_entries")
+
+
+# SECTION: Feedback Model
+class AnswerFeedback(Base):
+    """
+    Stores user feedback on AI-generated answers.
+    """
+    __tablename__ = "answer_feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_id = Column(Integer, ForeignKey("incidents.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # User who gave feedback
+    question = Column(Text, nullable=False) # The question that was asked
+    answer = Column(Text, nullable=False) # The AI's answer
+    is_helpful = Column(Boolean, nullable=False) # True for thumbs up, False for thumbs down
+    feedback_text = Column(Text, nullable=True) # Optional text comment
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    incident = relationship("Incident") # Simplified relationship, no back_populates needed for simple feedback
+    user = relationship("User") # Simplified relationship
+
+
+# SECTION: Analytics Model for Questions
+class QuestionLog(Base):
+    """
+    Stores questions and AI responses for analytics and feedback.
+    """
+    __tablename__ = "question_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_id = Column(Integer, ForeignKey("incidents.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    question = Column(Text, nullable=False)
+    ai_answer = Column(Text, nullable=True)
+    answered_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    incident = relationship("Incident")
+    user = relationship("User")

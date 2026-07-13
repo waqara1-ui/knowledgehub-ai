@@ -26,8 +26,9 @@ from datetime import timedelta, datetime, timezone # For token expiration
 from pydantic import BaseModel, EmailStr
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+#for security
 
-SECRET_KEY = "KEY_PASSOWRD_131" # CHANGE THIS IN PRODUCTION!
+SECRET_KEY = os.environ.get("SECRET_KEY", "sophisticated-snail-top-secret-key") # Read from ENV, fallback for dev
 ALGORITHM = "HS256" # Hashing algorithm for JWT
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 # Token expires in 60 minutes
 

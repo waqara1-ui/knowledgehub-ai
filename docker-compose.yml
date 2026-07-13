@@ -1,0 +1,16 @@
+# docker-compose.yml
+
+version: '3.8' # Docker Compose file format version
+
+services:
+  loglens_app:
+    build: . # Build from the Dockerfile in the current directory
+    ports:
+      - "8000:8000" # Map host port 8000 to container port 8000
+    environment:
+      
+      SECRET_KEY: "sophisticated-snail-top-secret-key" 
+      
+    volumes:
+      - ./uploaded_files:/app/uploaded_files
+      - ./policy_assistant.db:/app/policy_assistant.db

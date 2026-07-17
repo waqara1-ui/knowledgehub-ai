@@ -33,9 +33,9 @@ ALGORITHM = "HS256" # Hashing algorithm for JWT
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 # Token expires in 60 minutes
 
 
-# Create all database tables defined in models.py
+# Creating the database tables defined in models.py
 # This will create the .db file and tables if they don't exist
-# In a real production app, you would use a migration tool like Alembic for this.
+# In a real production app, I can use a migration tool like Alembic for this.
 Base.metadata.create_all(bind=engine)
 
 # creating an instance of FastAPI and assigning into app which is what Uvicorn will run
@@ -53,7 +53,7 @@ DbSessionDep = Annotated[Session, Depends(get_database)]
 # Annotated[Session, Depends(get_database)] tells FastAPI:
 # “this parameter is a Session and should be provided by get_database.”
 
-# SECTION: Pydantic Schemas (for requests/responses)
+#Pydantic Schemas (for requests/responses)
 
 class UserCreate(BaseModel):
     username: str

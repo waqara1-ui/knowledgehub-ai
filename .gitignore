@@ -7,3 +7,4 @@ uploads/
 .vscode/
 .idea/
 uploaded_files/
+.env

@@ -1,8 +1,17 @@
 # models.py
-from sqlalchemy import (Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Float,)
+from sqlalchemy import (Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Float, Index,)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
+from config import settings
 from database import Base
+
+# Uses pgvector with Postgres and text storage with SQLite.
+if settings.use_pgvector:
+    from pgvector.sqlalchemy import Vector
+    EmbeddingType = Vector(settings.EMBEDDING_DIM)
+else:
+    EmbeddingType = Text
 
 
 # Model table
@@ -88,9 +97,19 @@ class DocumentChunk(Base):
     chunk_text = Column(Text, nullable=False)
     chunk_order = Column(Integer, nullable=False)
 
-    # Embedding stored as JSON/text for now. Later will use a vector DB.
-    embedding = Column(Text, nullable=True)
+    # Vector column on Postgres, JSON string on SQLite. See EmbeddingType above.
+    embedding = Column(EmbeddingType, nullable=True)
+
+    # Which embedding model produced this vector. Lets you detect stale
+    # embeddings after a model change instead of silently comparing vectors
+    # from two different models, which produces garbage similarity scores.
+    embedding_model = Column(String, nullable=True)
+
     document = relationship("Document", back_populates="chunks")
+
+    __table_args__ = (
+        Index("idx_chunk_document_order", "document_id", "chunk_order"),
+    )
 
 
 # Incident table

@@ -1,10 +1,15 @@
 venv/
 __pycache__/
 *.pyc
-*.db
+
+# Local environment and database files
 .env
+*.db
+
+# Uploaded files
 uploads/
+uploaded_files/
+
+# Editor settings
 .vscode/
 .idea/
-uploaded_files/
-.env

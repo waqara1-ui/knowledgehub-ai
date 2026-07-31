@@ -1,49 +1,123 @@
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 import os
-import uuid  # generates unique links?
-from datetime import datetime
+import uuid
 import re  # for log parsing
 
-from database import engine, Base, get_database
-from sqlalchemy import func
+from database import (
+    engine,
+    Base,
+    get_database,
+    SessionLocal,
+    wait_for_database,
+    ensure_pgvector_extension,
+    create_vector_index,
+)
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 import models
 
 from pypdf import PdfReader  # for PDF parsing
 
-# NEW IMPORTS FOR EMBEDDINGS
 from sentence_transformers import SentenceTransformer
-import json  # To store embeddings as JSON string in DB
+import json
 import asyncio
 
-#NEW IMPORTS FOR SECURITY
 from passlib.context import CryptContext
 from jose import jwt, JWTError
-from datetime import timedelta, datetime, timezone # For token expiration
+from datetime import timedelta, datetime, timezone
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-#for security
+from config import settings
+import llm
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "sophisticated-snail-top-secret-key") # Read from ENV, fallback for dev
-ALGORITHM = "HS256" # Hashing algorithm for JWT
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 # Token expires in 60 minutes
+# Auth config now comes from the environment. Nothing secret is in this file.
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = settings.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 
-# Creating the database tables defined in models.py
-# This will create the .db file and tables if they don't exist
-# In a real production app, I can use a migration tool like Alembic for this.
-Base.metadata.create_all(bind=engine)
+def bootstrap_admin() -> None:
+    """
+    Create the first admin account from environment variables, once.
 
-# creating an instance of FastAPI and assigning into app which is what Uvicorn will run
+    This replaces the old /debug/create-user endpoint, which created an admin
+    with a password that was readable in the source. Anyone who found the
+    deployed API could have logged in as that admin and uploaded documents.
+    """
+    if not (settings.BOOTSTRAP_ADMIN_USERNAME and settings.BOOTSTRAP_ADMIN_PASSWORD):
+        return
+
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(models.User)
+            .filter(models.User.username == settings.BOOTSTRAP_ADMIN_USERNAME)
+            .first()
+        )
+        if existing:
+            return
+
+        admin = models.User(
+            username=settings.BOOTSTRAP_ADMIN_USERNAME,
+            email=settings.BOOTSTRAP_ADMIN_EMAIL
+            or f"{settings.BOOTSTRAP_ADMIN_USERNAME}@loglens.local",
+            hashed_password=get_password_hash(settings.BOOTSTRAP_ADMIN_PASSWORD),
+            is_admin=True,
+        )
+        db.add(admin)
+        db.commit()
+        print(f"[bootstrap] Created admin user '{admin.username}'.")
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Startup work, in the order it has to happen.
+
+    In Docker the app container starts before Postgres is ready, so we wait.
+    pgvector has to be installed before create_all(), because the vector column
+    type does not exist until the extension does. The index comes after the
+    table exists.
+    """
+    wait_for_database()
+    ensure_pgvector_extension()
+    Base.metadata.create_all(bind=engine)
+    create_vector_index()
+    bootstrap_admin()
+
+    # Warm the embedding model so the first upload is not slow.
+    await asyncio.to_thread(get_embedding_model)
+
+    print(f"[startup] DB: {settings.DATABASE_URL.split('@')[-1]}")
+    print(f"[startup] pgvector: {settings.use_pgvector}")
+    print(f"[startup] LLM provider: {settings.LLM_PROVIDER}")
+    yield
+
+
 app = FastAPI(
     title="LogLens AI",
     description="AI-powered incident investigation and log analysis assistant.",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
 )
+
+if settings.cors_origin_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # ensuring upload directory exists
 UPLOAD_DIR = "uploaded_files"
@@ -75,13 +149,35 @@ class AnswerFeedbackSubmit(BaseModel):
     is_helpful: bool
     feedback_text: Optional[str] = None
 
+
+class IncidentCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    description: Optional[str] = None
+    severity: Optional[str] = None
+    status: str = "open"
+
+
 @app.get("/health")
 def health_check():
+    """Liveness probe. Cheap, no external calls."""
+    return {
+        "status": "ok",
+        "database": "postgres" if settings.is_postgres else "sqlite",
+        "pgvector": settings.use_pgvector,
+        "llm_provider": settings.LLM_PROVIDER,
+        "embedding_model": settings.EMBEDDING_MODEL,
+    }
+
+
+@app.get("/health/llm")
+async def health_check_llm():
     """
-    Adding a health check endpoint to return a simple JSON response that indicates the service is running.
-    This is useful for monitoring and uptime checks.
+    Readiness probe that actually calls the LLM.
+
+    Worth having separately: the API can be perfectly healthy while the model
+    endpoint is unreachable, and you want to know which one is broken.
     """
-    return {"status": "ok"}  # JSON response
+    return await llm.health_check()
 
 @app.get("/hello")
 def hello(name: str = "there"):
@@ -297,64 +393,127 @@ def login(form_data: UserLogin, db: DbSessionDep):
 
     return TokenResponse(access_token=access_token)
 
-@app.post("/debug/create-user", status_code=status.HTTP_201_CREATED)
-def create_debug_user(db: DbSessionDep):
-    """
-    DEBUG ENDPOINT: Creates a dummy user for testing purposes.
-    Sets ID to 1. REMOVE THIS IN PRODUCTION.
-    """
-    # Check if a user with id=1 already exists
-    existing_user = db.query(models.User).filter(models.User.id == 1).first()
-    if existing_user:
-        return {"message": "Debug user (ID 1) already exists.", "user_id": existing_user.id}
+# SECTION: Current user + Incident endpoints
+@app.get("/me")
+def read_current_user(
+    current_user: Annotated[models.User, Depends(get_current_user)],
+):
+    """Who am I? Used by the front end to decide whether to show admin controls."""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_admin": current_user.is_admin,
+    }
 
-    # Create a new user with ID 1
-    new_user = models.User(
-        id=1, # Explicitly set ID for testing
-        username="debug_user",
-        email="debug@example.com",
-        hashed_password=get_password_hash("not_a_real_password_hash"), # Store a valid bcrypt hash
-        is_admin=True,
+
+@app.post("/incidents", status_code=status.HTTP_201_CREATED)
+def create_incident(
+    payload: IncidentCreate,
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+):
+    """Create an incident. Replaces the old unauthenticated debug endpoint."""
+    incident = models.Incident(
+        title=payload.title,
+        description=payload.description,
+        severity=payload.severity,
+        status=payload.status or models.IncidentStatus.OPEN,
+        creator_id=current_user.id,
     )
-    db.add(new_user)
+    db.add(incident)
     db.commit()
-    db.refresh(new_user)
-    return {"message": "Debug user created successfully.", "user_id": new_user.id}
+    db.refresh(incident)
+    return _incident_to_dict(incident)
 
-# main.py (add this right after create_debug_user)
 
-@app.post("/debug/create-incident", status_code=status.HTTP_201_CREATED)
-def create_debug_incident(db: DbSessionDep):
-    """
-    DEBUG ENDPOINT: Creates a dummy incident for testing purposes.
-    Sets ID to 1 and links to User ID 1. REMOVE THIS IN PRODUCTION.
-    """
-    # Check if an incident with id=1 already exists
-    existing_incident = db.query(models.Incident).filter(models.Incident.id == 1).first()
-    if existing_incident:
-        return {"message": "Debug incident (ID 1) already exists.", "incident_id": existing_incident.id}
+@app.get("/incidents")
+def list_incidents(
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+    limit: int = 50,
+):
+    incidents = (
+        db.query(models.Incident)
+        .order_by(models.Incident.created_at.desc())
+        .limit(min(limit, 200))
+        .all()
+    )
+    return {"count": len(incidents), "incidents": [_incident_to_dict(i) for i in incidents]}
 
-    # IMPORTANT: Ensure User ID 1 exists before creating incident
-    existing_user = db.query(models.User).filter(models.User.id == 1).first()
-    if not existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail="User with ID 1 must exist before creating a debug incident. Please run /debug/create-user first."
+
+@app.get("/incidents/{incident_id}")
+def get_incident(
+    incident_id: int,
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+):
+    incident = db.query(models.Incident).filter(models.Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return _incident_to_dict(incident)
+
+
+def _incident_to_dict(i: models.Incident) -> dict:
+    return {
+        "id": i.id,
+        "title": i.title,
+        "description": i.description,
+        "status": i.status,
+        "severity": i.severity,
+        "created_at": i.created_at.isoformat() if i.created_at else None,
+        "creator_id": i.creator_id,
+    }
+
+
+@app.get("/documents")
+def list_documents(
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+    type: Optional[str] = None,
+):
+    """List uploaded documents, optionally filtered by type (log / runbook)."""
+    q = db.query(models.Document)
+    if type:
+        q = q.filter(models.Document.type == type)
+    docs = q.order_by(models.Document.uploaded_at.desc()).limit(200).all()
+
+    return {
+        "count": len(docs),
+        "documents": [
+            {
+                "id": d.id,
+                "title": d.title,
+                "type": d.type,
+                "status": d.status,
+                "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+                "chunk_count": len(d.chunks) if d.type == models.DocumentType.RUNBOOK else None,
+            }
+            for d in docs
+        ],
+    }
+
+
+# SECTION: Debug endpoints (disabled unless ENABLE_DEBUG_ENDPOINTS=true)
+if settings.ENABLE_DEBUG_ENDPOINTS:
+
+    @app.post("/debug/create-incident", status_code=status.HTTP_201_CREATED)
+    def create_debug_incident(
+        db: DbSessionDep,
+        current_admin: Annotated[models.User, Depends(get_current_admin)],
+    ):
+        """Local testing helper. Requires an admin token even when enabled."""
+        incident = models.Incident(
+            title="Debug Test Incident",
+            description="A temporary incident for RAG feature testing.",
+            status=models.IncidentStatus.OPEN,
+            severity="SEV-3",
+            creator_id=current_admin.id,
         )
-
-    # Create a new incident with ID 1
-    new_incident = models.Incident(
-        id=1, # Explicitly set ID for testing
-        title="Debug Test Incident",
-        description="A temporary incident for RAG feature testing.",
-        status=models.IncidentStatus.OPEN,
-        severity="SEV-3",
-        creator_id=1, # Link to our debug_user
-    )
-    db.add(new_incident)
-    db.commit()
-    db.refresh(new_incident)
-    return {"message": "Debug incident created successfully.", "incident_id": new_incident.id}
+        db.add(incident)
+        db.commit()
+        db.refresh(incident)
+        return {"message": "Debug incident created.", "incident_id": incident.id}
 
 # helper to detect file type
 def detect_document_type(file: UploadFile) -> str:
@@ -443,8 +602,8 @@ def get_embedding_model() -> SentenceTransformer:
     if embedding_model is None:
         # Load a small, fast model suitable for CPU and local development.
         # This model is good for general-purpose sentence embeddings.
-        print("Loading SentenceTransformer model...")
-        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        print(f"Loading SentenceTransformer model: {settings.EMBEDDING_MODEL} ...")
+        embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL)
         print("Model loaded.")
     return embedding_model
 
@@ -488,6 +647,159 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
         return 0.0
 
     return dot / ((mag_a ** 0.5) * (mag_b ** 0.5))
+
+
+# SECTION: Chunking
+def chunk_text(
+    text: str,
+    max_chars: int = None,
+    overlap: int = None,
+) -> list[str]:
+    """
+    Split document text into overlapping chunks.
+
+    The old approach split on blank lines and truncated anything over 2000
+    characters with an ellipsis, which threw away real content: a long runbook
+    section would lose everything past the cutoff, and the answer to a question
+    could sit in the discarded tail.
+
+    This version packs paragraphs up to a size limit, hard-splits paragraphs
+    that are individually too long, and carries a short overlap between chunks
+    so a procedure spanning a boundary is still retrievable from both sides.
+    """
+    max_chars = max_chars or settings.CHUNK_MAX_CHARS
+    overlap = overlap or settings.CHUNK_OVERLAP_CHARS
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if not paragraphs:
+        return []
+
+    # Break any single paragraph that already exceeds the limit.
+    pieces: list[str] = []
+    for para in paragraphs:
+        if len(para) <= max_chars:
+            pieces.append(para)
+            continue
+        start = 0
+        while start < len(para):
+            pieces.append(para[start : start + max_chars])
+            start += max_chars - overlap
+
+    # Pack pieces into chunks.
+    chunks: list[str] = []
+    current = ""
+    for piece in pieces:
+        if not current:
+            current = piece
+        elif len(current) + len(piece) + 2 <= max_chars:
+            current = f"{current}\n\n{piece}"
+        else:
+            chunks.append(current)
+            tail = current[-overlap:] if overlap else ""
+            current = f"{tail}\n\n{piece}".strip() if tail else piece
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def serialize_embedding(vector: list[float]):
+    """pgvector takes the list directly; SQLite needs a JSON string."""
+    return vector if settings.use_pgvector else json.dumps(vector)
+
+
+def deserialize_embedding(stored) -> list[float]:
+    if stored is None:
+        return []
+    if isinstance(stored, str):
+        try:
+            return json.loads(stored)
+        except json.JSONDecodeError:
+            return []
+    return list(stored)
+
+
+# SECTION: Retrieval
+def retrieve_relevant_chunks(
+    db: Session,
+    query: str,
+    top_k: int = None,
+    threshold: float = None,
+) -> list[dict]:
+    """
+    Semantic search over runbook chunks.
+
+    On Postgres with pgvector this is a single indexed SQL query: the database
+    does the distance maths and returns only top_k rows.
+
+    On SQLite we fall back to loading every chunk and scoring in Python, which
+    is what the original code did everywhere. That is O(n) in both rows and
+    memory and is the main reason this project needed Postgres.
+    """
+    top_k = top_k or settings.TOP_K_CHUNKS
+    threshold = settings.SIMILARITY_THRESHOLD if threshold is None else threshold
+
+    query_embedding = generate_embedding(query)
+
+    if settings.use_pgvector:
+        # cosine_distance = 1 - cosine_similarity
+        distance = models.DocumentChunk.embedding.cosine_distance(query_embedding)
+        rows = (
+            db.query(
+                models.DocumentChunk,
+                models.Document,
+                distance.label("distance"),
+            )
+            .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
+            .filter(
+                models.Document.type == models.DocumentType.RUNBOOK,
+                models.DocumentChunk.embedding.isnot(None),
+            )
+            .order_by(distance)
+            .limit(top_k)
+            .all()
+        )
+        scored = [
+            {
+                "similarity": 1.0 - float(dist),
+                "chunk_id": chunk.id,
+                "document_id": doc.id,
+                "document_title": doc.title,
+                "chunk_order": chunk.chunk_order,
+                "chunk_text": chunk.chunk_text,
+            }
+            for chunk, doc, dist in rows
+        ]
+    else:
+        chunks_with_docs = (
+            db.query(models.DocumentChunk, models.Document)
+            .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
+            .filter(
+                models.Document.type == models.DocumentType.RUNBOOK,
+                models.DocumentChunk.embedding.isnot(None),
+            )
+            .all()
+        )
+        scored = []
+        for chunk, doc in chunks_with_docs:
+            vec = deserialize_embedding(chunk.embedding)
+            if not vec:
+                continue
+            scored.append(
+                {
+                    "similarity": cosine_similarity(query_embedding, vec),
+                    "chunk_id": chunk.id,
+                    "document_id": doc.id,
+                    "document_title": doc.title,
+                    "chunk_order": chunk.chunk_order,
+                    "chunk_text": chunk.chunk_text,
+                }
+            )
+        scored.sort(key=lambda item: item["similarity"], reverse=True)
+        scored = scored[:top_k]
+
+    return [s for s in scored if s["similarity"] >= threshold]
 
 
 @app.post("/admin/upload", status_code=status.HTTP_201_CREATED)
@@ -618,8 +930,9 @@ async def upload_document(
                 detail=f"Failed to parse document content: {e}",
             )
 
-        # Simple chunking strategy for now: split by double newline and filter empty chunks
-        raw_chunks = [chunk.strip() for chunk in full_text.split("\n\n") if chunk.strip()]
+        # Overlapping chunking. See chunk_text() for why this replaced the
+        # old split-on-blank-line-and-truncate approach.
+        raw_chunks = chunk_text(full_text)
 
         if not raw_chunks and full_text.strip():
             raw_chunks = [full_text.strip()]
@@ -634,20 +947,15 @@ async def upload_document(
             )
 
         document_chunks = []
-        for i, chunk_text in enumerate(raw_chunks):
-            # Limit chunk size for demonstration
-            if len(chunk_text) > 2000:
-                chunk_text = chunk_text[:2000] + "..."  # Truncate and add ellipsis
-
-            # Generate embedding for the chunk
-            chunk_embedding = generate_embedding(chunk_text)
+        for i, text_piece in enumerate(raw_chunks):
+            chunk_embedding = generate_embedding(text_piece)
 
             db_chunk = models.DocumentChunk(
                 document_id=document.id,
-                chunk_text=chunk_text,
+                chunk_text=text_piece,
                 chunk_order=i,
-                # Store embedding as a JSON string for now
-                embedding=json.dumps(chunk_embedding),
+                embedding=serialize_embedding(chunk_embedding),
+                embedding_model=settings.EMBEDDING_MODEL,
             )
             document_chunks.append(db_chunk)
 
@@ -749,105 +1057,32 @@ def get_log_summary(document_id: int, db: DbSessionDep):
 
 #phase 3
 @app.get("/search/runbooks", response_model=dict)
-def search_runbooks(query: str, db: DbSessionDep, top_k: int = 5):
+def search_runbooks(
+    query: str,
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+    top_k: int = 5,
+    threshold: float = 0.0,
+):
     """
-    Semantic search over runbook/document chunks.
+    Semantic search over runbook chunks.
 
-    Steps:
-    - Embedding the query using the same embedding model.
-    - Load all DocumentChunk embeddings for RUNBOOK documents.
-    - Computing cosine similarity between query embedding and each chunk embedding.
-    - Sorting by similarity and returning the top_k matches.
-
-    Query parameters:
-    - query: the natural language question or phrase.
-    - top_k: how many top results to return (default: 5).
+    Retrieval now lives in retrieve_relevant_chunks() so that this endpoint and
+    the RAG endpoint cannot drift apart. Default threshold is 0.0 here because
+    when you are inspecting search quality you want to see the weak matches too.
     """
-    if not query.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query must not be empty.",
-        )
-
-    # 1. Generate embedding for the query
-    query_embedding = generate_embedding(query)
-
-    # 2. Load all chunks for documents of type RUNBOOK that have embeddings
-    # Join DocumentChunk with Document to filter only RUNBOOK-type documents
-    chunks_with_docs = (
-        db.query(models.DocumentChunk, models.Document)
-        .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
-        .filter(
-            models.Document.type == models.DocumentType.RUNBOOK,
-            models.DocumentChunk.embedding.isnot(None),
-        )
-        .all()
-    )
-
-    if not chunks_with_docs:
-        return {
-            "query": query,
-            "results": [],
-            "message": "No runbook/document chunks with embeddings found.",
-        }
-
-    # 3. Compute similarity with each chunk
-    scored_results = []
-    for chunk, document in chunks_with_docs:
-        try:
-            # embedding is stored as JSON string, so we parse it
-            chunk_embedding = json.loads(chunk.embedding)
-        except Exception:
-            # If parsing fails for some reason, skip this chunk
-            continue
-
-        sim = cosine_similarity(query_embedding, chunk_embedding)
-
-        scored_results.append(
-            {
-                "similarity": sim,
-                "chunk_id": chunk.id,
-                "document_id": document.id,
-                "document_title": document.title,
-                "chunk_order": chunk.chunk_order,
-                "chunk_text": chunk.chunk_text,
-            }
-        )
-
-    # 4. Sort by similarity (highest first) and take top_k
-    scored_results.sort(key=lambda item: item["similarity"], reverse=True)
-    top_results = scored_results[: top_k]
+    results = retrieve_relevant_chunks(db, query, top_k=top_k, threshold=threshold)
 
     return {
         "query": query,
         "top_k": top_k,
-        "result_count": len(top_results),
-        "results": top_results,
+        "threshold": threshold,
+        "backend": "pgvector" if settings.use_pgvector else "python",
+        "result_count": len(results),
+        "results": [
+            {**r, "similarity": round(float(r["similarity"]), 4)} for r in results
+        ],
     }
-
-# main.py (add after generate_embedding and cosine_similarity)
-
-# ... (your generate_embedding and cosine_similarity functions) ...
-
-# SECTION: Mock LLM for RAG (Placeholder for actual LLM integration)
-async def mock_llm_generate(prompt: str) -> str:
-    """
-    A placeholder function that simulates an LLM generating a response.
-    In a real application, this would call a service like Google Gemini, OpenAI GPT, etc.
-    """
-    print(f"Mock LLM received prompt:\n{prompt[:500]}...") # Print first 500 chars of prompt
-    
-    # Simulate thinking time
-    await asyncio.sleep(0.1) 
-
-    if "database timeout" in prompt.lower() and "connection pool" in prompt.lower():
-        return "Based on the provided context, a common cause for database timeouts is connection pool exhaustion. Consider increasing the connection pool size or restarting the affected services."
-    elif "restart" in prompt.lower() and "service" in prompt.lower():
-        return "The context suggests that restarting the relevant service is a common troubleshooting step for many issues."
-    elif "no extractable text" in prompt.lower():
-        return "The document indicates it contains no extractable text, suggesting it might be an image-only PDF or corrupted."
-    else:
-        return "Based on the provided context, I can give a general answer. To solve the issue, you should review logs and documentation for specific steps."
 
 
 # SECTION: RAG Endpoint for Incident Investigation
@@ -857,124 +1092,94 @@ async def ask_incident_assistant(
     question: Annotated[str, Form(...)],
     db: DbSessionDep,
     current_user: Annotated[models.User, Depends(get_current_user)],
-    top_k_chunks: int = 5,
+    top_k_chunks: int = None,
 ):
+    """
+    Ask a question about an incident, answered from the runbook corpus.
+
+    Flow: retrieve -> build a numbered context block -> call the configured LLM
+    -> persist the question and answer for analytics.
+    """
     incident = db.query(models.Incident).filter(models.Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found.")
-    
-    if not question.strip():
+
+    question = question.strip()
+    if not question:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Question cannot be empty.",
         )
-    
-    # Log the question asked for analytics (before AI answer)
+
+    top_k = top_k_chunks or settings.TOP_K_CHUNKS
+
+    # Retrieval happens off the event loop: embedding a query is CPU-bound and
+    # would otherwise block every other request on this worker.
+    relevant_chunks = await asyncio.to_thread(
+        retrieve_relevant_chunks, db, question, top_k
+    )
+
+    if relevant_chunks:
+        context_block, citations = llm.build_context_block(relevant_chunks)
+        system_prompt = llm.GROUNDED_SYSTEM_PROMPT
+        user_prompt = (
+            f"Incident: {incident.title}\n"
+            f"Incident description: {incident.description or 'not provided'}\n\n"
+            f"Question: {question}\n\n"
+            f"Runbook context:\n{context_block}"
+        )
+        grounded = True
+        message = "Answer generated from runbook context."
+    else:
+        context_block, citations = "", []
+        system_prompt = llm.UNGROUNDED_SYSTEM_PROMPT
+        user_prompt = (
+            f"Incident: {incident.title}\n"
+            f"Question: {question}\n\n"
+            "No runbook context was retrieved."
+        )
+        grounded = False
+        message = (
+            "No runbook content cleared the similarity threshold "
+            f"({settings.SIMILARITY_THRESHOLD}). Answer is general guidance only."
+        )
+
+    result = await llm.generate(system_prompt, user_prompt)
+
+    # Persist once, after we have the answer. The old code committed the
+    # question first and then committed again with the answer, doubling the
+    # writes on every single request.
     question_log = models.QuestionLog(
         incident_id=incident_id,
         user_id=current_user.id,
         question=question,
-        # ai_answer will be updated after LLM call
+        ai_answer=result.text,
     )
-    db.add(question_log)
-    db.commit() # Commit to get question_log.id for potential error tracking later
-    db.refresh(question_log)
-
-    # --- (Semantic search, prompt construction, etc. - UNCHANGED from previous step) ---
-    query_embedding = generate_embedding(question)
-    chunks_with_docs = (
-        db.query(models.DocumentChunk, models.Document)
-        .join(models.Document, models.Document.id == models.DocumentChunk.document_id)
-        .filter(
-            models.Document.type == models.DocumentType.RUNBOOK,
-            models.DocumentChunk.embedding.isnot(None),
-        )
-        .all()
-    )
-
-    if not chunks_with_docs:
-        ai_answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge (no context):")
-        
-        # Update question_log with answer even if no context
-        question_log.ai_answer = ai_answer
-        db.add(question_log)
-        db.commit()
-        db.refresh(question_log)
-
-        return {
-            "incident_id": incident_id,
-            "question_log_id": question_log.id,
-            "question": question,
-            "answer": ai_answer,
-            "citations": [],
-            "message": "Answer based on general knowledge as no runbook documents or highly relevant chunks were found.",
-        }
-
-    scored_results = []
-    for chunk, document in chunks_with_docs:
-        try: chunk_embedding = json.loads(chunk.embedding)
-        except Exception: continue
-        sim = cosine_similarity(query_embedding, chunk_embedding)
-        scored_results.append(
-            {"similarity": sim, "chunk_id": chunk.id, "document_id": document.id,
-             "document_title": document.title, "chunk_order": chunk.chunk_order, "chunk_text": chunk.chunk_text,}
-        )
-    scored_results.sort(key=lambda item: item["similarity"], reverse=True)
-    relevant_chunks = scored_results[:top_k_chunks]
-
-    context_text = "\n\n".join(
-        [f"Document: {c['document_title']}\nChunk Order: {c['chunk_order']}\nContent: {c['chunk_text']}" for c in relevant_chunks if c["similarity"] > 0.7]
-    )
-
-    if not context_text:
-        ai_answer = await mock_llm_generate(f"Question: {question}\nAnswer based on general knowledge (no context passed threshold):")
-        
-        # Update question_log with answer
-        question_log.ai_answer = ai_answer
-        db.add(question_log)
-        db.commit()
-        db.refresh(question_log)
-
-        return {
-            "incident_id": incident_id,
-            "question_log_id": question_log.id,
-            "question": question,
-            "answer": ai_answer,
-            "citations": [],
-            "message": "Answer based on general knowledge as no highly relevant runbook context was found.",
-        }
-    
-    prompt = (
-        "You are an expert incident response assistant. "
-        "Answer the following question based ONLY on the provided context from engineering runbooks. "
-        "If the answer is not in the context, state that you cannot answer from the provided information. "
-        "Cite the document title and chunk order for each piece of information you use.\n\n"
-        f"Question: {question}\n\n"
-        f"Context:\n{context_text}\n\n"
-        "Answer:"
-    )
-    
-    ai_answer = await mock_llm_generate(prompt)
-
-    # NEW: Update the question_log with the actual AI answer
-    question_log.ai_answer = ai_answer
     db.add(question_log)
     db.commit()
     db.refresh(question_log)
-
-    citations = [
-        {"document_id": c["document_id"], "document_title": c["document_title"], "chunk_id": c["chunk_id"], "chunk_order": c["chunk_order"], "similarity": c["similarity"]}
-        for c in relevant_chunks if c["similarity"] > 0.7
-    ]
 
     return {
         "incident_id": incident_id,
         "question_log_id": question_log.id,
         "question": question,
-        "answer": ai_answer,
+        "answer": result.text,
         "citations": citations,
-        "message": "Answer generated using RAG with runbook context."
+        "grounded": grounded,
+        "llm": {
+            "provider": result.provider,
+            "model": result.model,
+            "degraded": result.degraded,
+            "error": result.error,
+        },
+        "retrieval": {
+            "backend": "pgvector" if settings.use_pgvector else "python",
+            "threshold": settings.SIMILARITY_THRESHOLD,
+            "chunks_used": len(citations),
+        },
+        "message": message,
     }
+
 
 @app.post("/feedback", status_code=status.HTTP_201_CREATED)
 def submit_answer_feedback(
@@ -1017,3 +1222,69 @@ def submit_answer_feedback(
         "message": "Feedback submitted successfully.",
         "is_helpful": new_feedback.is_helpful,
     }
+
+
+# SECTION: Analytics
+@app.get("/analytics/summary")
+def analytics_summary(
+    db: DbSessionDep,
+    current_user: Annotated[models.User, Depends(get_current_user)],
+):
+    """
+    Aggregate view of how the assistant is being used and whether it is helping.
+
+    The feedback loop only has value if you can see it, so this surfaces the
+    helpful/unhelpful split alongside volume.
+    """
+    total_questions = db.query(func.count(models.QuestionLog.id)).scalar() or 0
+    total_feedback = db.query(func.count(models.AnswerFeedback.id)).scalar() or 0
+    helpful = (
+        db.query(func.count(models.AnswerFeedback.id))
+        .filter(models.AnswerFeedback.is_helpful.is_(True))
+        .scalar()
+        or 0
+    )
+
+    recent = (
+        db.query(models.QuestionLog)
+        .order_by(models.QuestionLog.answered_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    return {
+        "total_questions": total_questions,
+        "total_feedback": total_feedback,
+        "helpful_count": helpful,
+        "unhelpful_count": total_feedback - helpful,
+        "helpful_rate": round(helpful / total_feedback, 3) if total_feedback else None,
+        "documents": {
+            "runbooks": db.query(func.count(models.Document.id))
+            .filter(models.Document.type == models.DocumentType.RUNBOOK)
+            .scalar()
+            or 0,
+            "logs": db.query(func.count(models.Document.id))
+            .filter(models.Document.type == models.DocumentType.LOG)
+            .scalar()
+            or 0,
+        },
+        "total_chunks": db.query(func.count(models.DocumentChunk.id)).scalar() or 0,
+        "total_log_entries": db.query(func.count(models.LogEntry.id)).scalar() or 0,
+        "recent_questions": [
+            {
+                "id": q.id,
+                "incident_id": q.incident_id,
+                "question": q.question,
+                "answered_at": q.answered_at.isoformat() if q.answered_at else None,
+            }
+            for q in recent
+        ],
+    }
+
+
+# SECTION: Front end
+# Mounted last so it does not shadow the API routes above. html=True makes
+# StaticFiles serve index.html at "/".
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")

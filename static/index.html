@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LogLens</title>
+
+  <style>
+    :root {
+      --charcoal: #514946;
+      --charcoal-dark: #403936;
+      --sage: #aaa898;
+      --sage-soft: #e7e6de;
+      --cream: #f7f0e5;
+      --paper: #fffdf8;
+      --terracotta: #d9653c;
+      --terracotta-dark: #b94e2f;
+      --ink: #2f2a28;
+      --muted: #756d69;
+      --line: #ddd4ca;
+      --danger: #b84c3d;
+      --warning: #db8c39;
+      --success: #6f856d;
+      --shadow: 0 10px 28px rgba(79, 71, 69, 0.08);
+      --radius: 16px;
+      --radius-sm: 10px;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--cream);
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.5;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button { cursor: pointer; }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    :focus-visible {
+      outline: 3px solid rgba(217, 101, 60, 0.35);
+      outline-offset: 2px;
+    }
+
+    .hidden { display: none !important; }
+
+    .topbar {
+      min-height: 78px;
+      padding: 0 34px;
+      background: linear-gradient(90deg, var(--charcoal-dark), var(--charcoal));
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: 0 2px 14px rgba(0, 0, 0, 0.12);
+    }
+
+    .brand {
+      font-family: var(--serif);
+      font-size: clamp(28px, 3vw, 38px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .brand span { color: var(--terracotta); }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: white;
+      font-weight: 600;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 40px));
+      margin: 30px auto 60px;
+    }
+
+    .card {
+      background: rgba(255, 253, 248, 0.96);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .card-pad { padding: 24px; }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: 1fr 1.08fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .stack {
+      display: grid;
+      gap: 22px;
+      margin-top: 24px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .section-heading h2,
+    .section-heading h3 {
+      margin: 0;
+      color: var(--ink);
+      font-family: var(--serif);
+      font-weight: 700;
+    }
+
+    .section-heading h2 { font-size: 25px; }
+    .section-heading h3 { font-size: 21px; }
+
+    .section-heading p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .icon-badge {
+      width: 48px;
+      height: 48px;
+      flex: 0 0 48px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--sage);
+      color: white;
+      font-size: 21px;
+    }
+
+    .incident-card {
+      border-left: 5px solid var(--terracotta);
+      min-height: 100%;
+    }
+
+    .incident-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .incident-title {
+      margin: 5px 0 4px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .incident-description {
+      margin: 0;
+      color: var(--muted);
+      max-width: 42ch;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      min-height: 30px;
+      border-radius: 999px;
+      background: rgba(217, 101, 60, 0.08);
+      border: 1px solid rgba(217, 101, 60, 0.35);
+      color: var(--terracotta-dark);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .meta-chip {
+      padding: 8px 12px;
+      border-radius: 9px;
+      background: #f3eee7;
+      border: 1px solid #e5ddd3;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .incident-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .incident-option {
+      width: 100%;
+      text-align: left;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--ink);
+    }
+
+    .incident-option.active {
+      border-color: var(--terracotta);
+      box-shadow: inset 4px 0 0 var(--terracotta);
+      background: #fffaf5;
+    }
+
+    .incident-option small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+    }
+
+    .details-block {
+      margin-top: 20px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .details-block summary {
+      cursor: pointer;
+      color: var(--terracotta-dark);
+      font-weight: 700;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 14px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    label span {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid #cfc5ba;
+      border-radius: 9px;
+      background: white;
+      color: var(--ink);
+      padding: 11px 12px;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: #9a918b;
+    }
+
+    .button {
+      border: 0;
+      border-radius: 9px;
+      min-height: 42px;
+      padding: 10px 18px;
+      font-weight: 700;
+      transition: 0.15s ease;
+    }
+
+    .button:hover { transform: translateY(-1px); }
+
+    .button-primary {
+      background: var(--terracotta);
+      color: white;
+      box-shadow: 0 6px 14px rgba(217, 101, 60, 0.2);
+    }
+
+    .button-primary:hover { background: var(--terracotta-dark); }
+
+    .button-secondary {
+      background: #f2ece4;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    .button-outline {
+      background: transparent;
+      color: var(--terracotta-dark);
+      border: 1px solid var(--terracotta);
+    }
+
+    .button-logout {
+      background: var(--terracotta);
+      color: white;
+      border: 0;
+    }
+
+    .upload-drop {
+      border: 1.5px dashed #c9bcae;
+      border-radius: 14px;
+      padding: 26px 18px;
+      text-align: center;
+      background: #fffaf4;
+      transition: 0.15s ease;
+    }
+
+    .upload-drop.dragging {
+      border-color: var(--terracotta);
+      background: #fff5ec;
+    }
+
+    .upload-drop input[type="file"] {
+      margin-top: 12px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+    }
+
+    .helper {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .notice {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #f4efe8;
+      color: var(--ink);
+    }
+
+    .notice.good {
+      border-left: 4px solid var(--success);
+    }
+
+    .notice.bad {
+      border-left: 4px solid var(--danger);
+    }
+
+    .library {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+
+    .library h3 {
+      margin: 0 0 12px;
+      font-family: var(--serif);
+      font-size: 18px;
+    }
+
+    .file-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border: 1px solid #e3dbd1;
+      border-radius: 10px;
+      background: white;
+    }
+
+    .file-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--sage-soft);
+      color: var(--charcoal);
+    }
+
+    .file-name {
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .file-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .ask-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 120px;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .ask-grid textarea {
+      min-height: 52px;
+      max-height: 160px;
+    }
+
+    .answer-box {
+      margin-top: 18px;
+      padding: 20px;
+      border-radius: 13px;
+      background: linear-gradient(135deg, #efefe8, #f6f2e9);
+      border: 1px solid #dedbcf;
+    }
+
+    .answer-box h4 {
+      margin: 0 0 10px;
+      font-family: var(--serif);
+      font-size: 18px;
+    }
+
+    .answer-body {
+      white-space: pre-wrap;
+      line-height: 1.65;
+    }
+
+    .source-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .source-chip {
+      border: 1px solid #d1cebf;
+      background: #dfded0;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+
+    .feedback-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .stat {
+      min-height: 104px;
+      padding: 16px;
+      border-radius: 12px;
+      background: white;
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .stat-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--sage-soft);
+      color: var(--charcoal);
+      font-size: 20px;
+    }
+
+    .stat-icon.error {
+      color: var(--danger);
+      background: #f4d9d5;
+    }
+
+    .stat-icon.warning {
+      color: var(--warning);
+      background: #fae3c9;
+    }
+
+    .stat-value {
+      font-size: 29px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .stat-label {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: white;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 560px;
+    }
+
+    th,
+    td {
+      padding: 11px 13px;
+      text-align: left;
+      border-bottom: 1px solid #ebe4db;
+    }
+
+    th {
+      background: #d2d0bf;
+      font-size: 13px;
+    }
+
+    th:last-child,
+    td:last-child {
+      text-align: right;
+      width: 90px;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .auth-shell {
+      width: min(460px, calc(100% - 32px));
+      margin: 70px auto;
+    }
+
+    .auth-card {
+      padding: 28px;
+    }
+
+    .auth-card h1 {
+      margin: 0 0 6px;
+      font-family: var(--serif);
+    }
+
+    .auth-card p {
+      margin: 0 0 22px;
+      color: var(--muted);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .tab {
+      flex: 1;
+      border: 1px solid var(--line);
+      background: #f1ebe4;
+      color: var(--ink);
+    }
+
+    .tab.active {
+      border-color: var(--terracotta);
+      color: var(--terracotta-dark);
+      background: #fff6ef;
+    }
+
+    .empty {
+      padding: 18px;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: #fffaf5;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 15px;
+      height: 15px;
+      margin-right: 7px;
+      vertical-align: -2px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.5);
+      border-top-color: white;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 900px) {
+      .grid-two { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 620px) {
+      .topbar { padding: 0 18px; }
+      .page { width: min(100% - 24px, 1180px); }
+      .top-actions .user-chip span:last-child { display: none; }
+      .ask-grid { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr; }
+      .card-pad { padding: 18px; }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">Log<span>Lens</span></div>
+
+    <div id="topActions" class="top-actions hidden">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">●</span>
+        <span id="topUser">Admin</span>
+      </div>
+      <button class="button button-logout" type="button" onclick="logout()">Log out</button>
+    </div>
+  </header>
+
+  <section id="authGate" class="auth-shell">
+    <div class="card auth-card">
+      <h1>Welcome to LogLens</h1>
+      <p>Sign in to review incidents, upload files, and investigate issues.</p>
+
+      <div class="tabs" role="tablist" aria-label="Account options">
+        <button id="loginTab" class="button tab active" type="button" onclick="switchAuth('login')">Log in</button>
+        <button id="signupTab" class="button tab" type="button" onclick="switchAuth('signup')">Create account</button>
+      </div>
+
+      <div id="loginForm">
+        <label>
+          <span>Username</span>
+          <input id="loginUsername" autocomplete="username" />
+        </label>
+
+        <label>
+          <span>Password</span>
+          <input id="loginPassword" type="password" autocomplete="current-password" />
+        </label>
+
+        <button class="button button-primary" type="button" onclick="login()">Log in</button>
+      </div>
+
+      <div id="signupForm" class="hidden">
+        <label>
+          <span>Username</span>
+          <input id="signupUsername" autocomplete="username" />
+        </label>
+
+        <label>
+          <span>Email</span>
+          <input id="signupEmail" type="email" autocomplete="email" />
+        </label>
+
+        <label>
+          <span>Password</span>
+          <input id="signupPassword" type="password" autocomplete="new-password" />
+        </label>
+
+        <button class="button button-primary" type="button" onclick="signup()">Create account</button>
+      </div>
+
+      <div id="authMessage"></div>
+    </div>
+  </section>
+
+  <main id="app" class="page hidden">
+    <section class="grid-two">
+      <article class="card card-pad incident-card">
+        <div class="incident-top">
+          <div class="section-heading">
+            <div class="icon-badge" aria-hidden="true">!</div>
+            <div>
+              <h2>Incident</h2>
+              <div id="incidentSummary">
+                <div class="empty">Create or select an incident to begin.</div>
+              </div>
+            </div>
+          </div>
+
+          <span id="incidentStatus" class="status-pill hidden">Open</span>
+        </div>
+
+        <div id="incidentMeta" class="meta-row"></div>
+        <div id="incidentList" class="incident-list"></div>
+
+        <details class="details-block">
+          <summary>Create a new incident</summary>
+
+          <div style="margin-top:16px">
+            <label>
+              <span>Incident title</span>
+              <input id="incidentTitle" placeholder="e.g. API latency spike" />
+            </label>
+
+            <label>
+              <span>Severity</span>
+              <select id="incidentSeverity">
+                <option value="SEV-1">SEV-1</option>
+                <option value="SEV-2" selected>SEV-2</option>
+                <option value="SEV-3">SEV-3</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Short description</span>
+              <textarea id="incidentDescription" placeholder="Briefly describe what is happening"></textarea>
+            </label>
+
+            <button class="button button-primary" type="button" onclick="createIncident()">Create incident</button>
+          </div>
+        </details>
+      </article>
+
+      <article id="uploadCard" class="card card-pad">
+        <div class="section-heading">
+          <div class="icon-badge" aria-hidden="true">⇧</div>
+          <div>
+            <h2>Upload files</h2>
+            <p>Upload runbooks, logs, or supporting documents.</p>
+          </div>
+        </div>
+
+        <label>
+          <span>Title</span>
+          <input id="uploadTitle" placeholder="e.g. Database runbook" />
+        </label>
+
+        <div id="dropZone" class="upload-drop">
+          <strong>Choose a file or drag and drop</strong>
+          <div class="helper">PDF, TXT, MD, LOG, JSONL, or NDJSON</div>
+          <input id="uploadFile" type="file" accept=".pdf,.txt,.md,.log,.jsonl,.ndjson" />
+        </div>
+
+        <button class="button button-primary" style="margin-top:14px" type="button" onclick="uploadFile()">Upload file</button>
+        <div id="uploadMessage"></div>
+
+        <div class="library">
+          <h3>Recent uploads</h3>
+          <div id="documentList" class="file-list"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="stack">
+      <article class="card card-pad">
+        <div class="section-heading">
+          <div class="icon-badge" aria-hidden="true">?</div>
+          <div>
+            <h2>Ask about this incident</h2>
+            <p>Get a clear answer based on your uploaded runbooks.</p>
+          </div>
+        </div>
+
+        <div class="ask-grid">
+          <textarea id="question" placeholder="What is happening, and what should I check first?"></textarea>
+          <button id="askButton" class="button button-primary" type="button" onclick="askQuestion()">Ask</button>
+        </div>
+
+        <div id="answerArea"></div>
+      </article>
+
+      <article class="card card-pad">
+        <div class="section-heading">
+          <div class="icon-badge" aria-hidden="true">◔</div>
+          <div>
+            <h2>Log summary</h2>
+            <p>Key insights from uploaded log files.</p>
+          </div>
+        </div>
+
+        <div id="logSummary" class="empty">
+          Choose Summary beside a log file to view its insights.
+        </div>
+      </article>
+
+      <article class="card card-pad">
+        <div class="section-heading">
+          <div class="icon-badge" aria-hidden="true">◎</div>
+          <div>
+            <h2>Usage summary</h2>
+            <p>A quick view of how LogLens is being used.</p>
+          </div>
+        </div>
+
+        <div id="analytics" class="stats"></div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      token: sessionStorage.getItem("loglens_token") || null,
+      user: null,
+      incidents: [],
+      currentIncidentId: null,
+      lastAnswer: null
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    const escapeHtml = (value) =>
+      String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+
+    function showMessage(element, text, kind = "") {
+      element.innerHTML = `<div class="notice ${kind}">${escapeHtml(text)}</div>`;
+    }
+
+    async function api(path, { method = "GET", body = null, form = null } = {}) {
+      const headers = {};
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
+
+      let payload = null;
+      if (form) {
+        payload = form;
+      } else if (body) {
+        headers["Content-Type"] = "application/json";
+        payload = JSON.stringify(body);
+      }
+
+      const response = await fetch(path, {
+        method,
+        headers,
+        body: payload
+      });
+
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      if (response.status === 401) {
+        logout();
+        throw new Error("Your session expired. Please log in again.");
+      }
+
+      if (!response.ok) {
+        const detail = data?.detail;
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : detail
+              ? JSON.stringify(detail)
+              : `Request failed (${response.status})`
+        );
+      }
+
+      return data;
+    }
+
+    function switchAuth(tab) {
+      const login = tab === "login";
+      $("loginTab").classList.toggle("active", login);
+      $("signupTab").classList.toggle("active", !login);
+      $("loginForm").classList.toggle("hidden", !login);
+      $("signupForm").classList.toggle("hidden", login);
+      $("authMessage").innerHTML = "";
+    }
+
+    async function signup() {
+      try {
+        await api("/auth/signup", {
+          method: "POST",
+          body: {
+            username: $("signupUsername").value.trim(),
+            email: $("signupEmail").value.trim(),
+            password: $("signupPassword").value
+          }
+        });
+
+        $("loginUsername").value = $("signupUsername").value.trim();
+        switchAuth("login");
+        showMessage($("authMessage"), "Account created. You can log in now.", "good");
+      } catch (error) {
+        showMessage($("authMessage"), error.message, "bad");
+      }
+    }
+
+    async function login() {
+      try {
+        const data = await api("/auth/login", {
+          method: "POST",
+          body: {
+            username: $("loginUsername").value.trim(),
+            password: $("loginPassword").value
+          }
+        });
+
+        state.token = data.access_token;
+        sessionStorage.setItem("loglens_token", state.token);
+        await startApp();
+      } catch (error) {
+        showMessage($("authMessage"), error.message, "bad");
+      }
+    }
+
+    function logout() {
+      state.token = null;
+      state.user = null;
+      state.currentIncidentId = null;
+      sessionStorage.removeItem("loglens_token");
+      $("app").classList.add("hidden");
+      $("topActions").classList.add("hidden");
+      $("authGate").classList.remove("hidden");
+    }
+
+    async function startApp() {
+      try {
+        state.user = await api("/me");
+      } catch {
+        logout();
+        return;
+      }
+
+      $("topUser").textContent = state.user.username;
+      $("authGate").classList.add("hidden");
+      $("app").classList.remove("hidden");
+      $("topActions").classList.remove("hidden");
+      $("uploadCard").classList.toggle("hidden", !state.user.is_admin);
+
+      await Promise.all([
+        loadIncidents(),
+        loadDocuments(),
+        loadAnalytics()
+      ]);
+    }
+
+    async function loadIncidents() {
+      const data = await api("/incidents");
+      state.incidents = data.incidents;
+
+      const list = $("incidentList");
+
+      if (!state.incidents.length) {
+        list.innerHTML = `<div class="empty">No incidents yet.</div>`;
+        $("incidentSummary").innerHTML = `<div class="empty">Create an incident to begin.</div>`;
+        $("incidentStatus").classList.add("hidden");
+        $("incidentMeta").innerHTML = "";
+        return;
+      }
+
+      if (!state.currentIncidentId) {
+        state.currentIncidentId = state.incidents[0].id;
+      }
+
+      list.innerHTML = state.incidents.map((incident) => `
+        <button
+          class="incident-option ${incident.id === state.currentIncidentId ? "active" : ""}"
+          type="button"
+          onclick="selectIncident(${incident.id})"
+        >
+          ${escapeHtml(incident.title)}
+          <small>${escapeHtml(incident.severity || "No severity")} · ${escapeHtml(incident.status)}</small>
+        </button>
+      `).join("");
+
+      renderCurrentIncident();
+    }
+
+    function selectIncident(id) {
+      state.currentIncidentId = id;
+      renderCurrentIncident();
+      loadIncidents();
+      $("answerArea").innerHTML = "";
+    }
+
+    function renderCurrentIncident() {
+      const incident = state.incidents.find((item) => item.id === state.currentIncidentId);
+      if (!incident) return;
+
+      $("incidentSummary").innerHTML = `
+        <div class="incident-title">${escapeHtml(incident.title)}</div>
+        <p class="incident-description">${escapeHtml(incident.description || "No description provided.")}</p>
+      `;
+
+      $("incidentStatus").textContent = incident.status || "open";
+      $("incidentStatus").classList.remove("hidden");
+
+      $("incidentMeta").innerHTML = `
+        <span class="meta-chip">${escapeHtml(incident.severity || "No severity")}</span>
+        <span class="meta-chip">Incident #${incident.id}</span>
+      `;
+    }
+
+    async function createIncident() {
+      const title = $("incidentTitle").value.trim();
+      if (!title) {
+        alert("Please enter an incident title.");
+        return;
+      }
+
+      try {
+        const incident = await api("/incidents", {
+          method: "POST",
+          body: {
+            title,
+            description: $("incidentDescription").value.trim() || null,
+            severity: $("incidentSeverity").value,
+            status: "open"
+          }
+        });
+
+        $("incidentTitle").value = "";
+        $("incidentDescription").value = "";
+        state.currentIncidentId = incident.id;
+        await loadIncidents();
+      } catch (error) {
+        alert(error.message);
+      }
+    }
+
+    async function loadDocuments() {
+      const data = await api("/documents");
+      const list = $("documentList");
+
+      if (!data.documents.length) {
+        list.innerHTML = `<div class="empty">No files uploaded yet.</div>`;
+        return;
+      }
+
+      list.innerHTML = data.documents.map((document) => {
+        const isLog = document.type === "log";
+        const details = isLog
+          ? "Log file"
+          : `${document.chunk_count ?? 0} chunks`;
+
+        return `
+          <div class="file-row">
+            <div class="file-icon" aria-hidden="true">${isLog ? "L" : "D"}</div>
+            <div>
+              <div class="file-name">${escapeHtml(document.title)}</div>
+              <div class="file-meta">${escapeHtml(document.type)} · ${escapeHtml(document.status)} · ${escapeHtml(details)}</div>
+            </div>
+            ${
+              isLog
+                ? `<button class="button button-secondary" type="button" onclick="loadLogSummary(${document.id})">Summary</button>`
+                : `<span class="helper">${document.chunk_count ?? 0} chunks</span>`
+            }
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function uploadFile() {
+      const file = $("uploadFile").files[0];
+      const title = $("uploadTitle").value.trim();
+
+      if (!file || !title) {
+        showMessage($("uploadMessage"), "Add a title and choose a file.", "bad");
+        return;
+      }
+
+      const form = new FormData();
+      form.append("title", title);
+      form.append("file", file);
+
+      showMessage($("uploadMessage"), "Uploading and processing your file...");
+
+      try {
+        const result = await api("/admin/upload", {
+          method: "POST",
+          form
+        });
+
+        const detail = result.chunk_count != null
+          ? `${result.chunk_count} chunks created`
+          : `${result.log_entries_created} log entries parsed`;
+
+        showMessage(
+          $("uploadMessage"),
+          `${result.title} uploaded successfully. ${detail}.`,
+          "good"
+        );
+
+        $("uploadTitle").value = "";
+        $("uploadFile").value = "";
+        await Promise.all([loadDocuments(), loadAnalytics()]);
+      } catch (error) {
+        showMessage($("uploadMessage"), error.message, "bad");
+      }
+    }
+
+    async function askQuestion() {
+      const question = $("question").value.trim();
+
+      if (!question) return;
+
+      if (!state.currentIncidentId) {
+        showMessage($("answerArea"), "Create or select an incident first.", "bad");
+        return;
+      }
+
+      const button = $("askButton");
+      button.disabled = true;
+      button.innerHTML = `<span class="spinner"></span>Thinking`;
+
+      const form = new FormData();
+      form.append("question", question);
+
+      try {
+        const result = await api(`/incidents/${state.currentIncidentId}/ask`, {
+          method: "POST",
+          form
+        });
+
+        state.lastAnswer = result;
+        renderAnswer(result);
+        loadAnalytics();
+      } catch (error) {
+        showMessage($("answerArea"), error.message, "bad");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Ask";
+      }
+    }
+
+    function renderAnswer(result) {
+      const body = escapeHtml(result.answer).replace(
+        /\[(\d+)\]/g,
+        '<strong>[$1]</strong>'
+      );
+
+      const sourceChips = result.citations?.length
+        ? result.citations.map((source) => `
+            <span class="source-chip">
+              ${escapeHtml(source.document_title)} · section ${source.chunk_order}
+            </span>
+          `).join("")
+        : "";
+
+      let html = "";
+
+      if (result.llm?.degraded) {
+        html += `<div class="notice bad">The selected language model was unavailable, so LogLens used its fallback response.</div>`;
+      }
+
+      if (!result.grounded) {
+        html += `<div class="notice">${escapeHtml(result.message)}</div>`;
+      }
+
+      html += `
+        <div class="answer-box">
+          <h4>Answer</h4>
+          <div class="answer-body">${body}</div>
+          ${sourceChips ? `<div class="source-list">${sourceChips}</div>` : ""}
+        </div>
+
+        <div class="feedback-row">
+          <span class="helper">Was this helpful?</span>
+          <button class="button button-secondary" type="button" onclick="sendFeedback(true)">Yes</button>
+          <button class="button button-secondary" type="button" onclick="sendFeedback(false)">No</button>
+          <div id="feedbackMessage"></div>
+        </div>
+      `;
+
+      $("answerArea").innerHTML = html;
+    }
+
+    async function sendFeedback(helpful) {
+      if (!state.lastAnswer) return;
+
+      try {
+        await api("/feedback", {
+          method: "POST",
+          body: {
+            question_log_id: state.lastAnswer.question_log_id,
+            is_helpful: helpful
+          }
+        });
+
+        showMessage($("feedbackMessage"), "Feedback recorded.", "good");
+        loadAnalytics();
+      } catch (error) {
+        showMessage($("feedbackMessage"), error.message, "bad");
+      }
+    }
+
+    async function loadLogSummary(documentId) {
+      const container = $("logSummary");
+      container.className = "";
+      container.innerHTML = "Loading...";
+
+      try {
+        const summary = await api(`/logs/${documentId}/summary`);
+
+        const levels = summary.level_counts || {};
+        const errors = levels.ERROR || 0;
+        const warnings = levels.WARN || 0;
+        const info = levels.INFO || 0;
+
+        container.innerHTML = `
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-icon">D</div>
+              <div>
+                <div class="stat-value">${summary.total_log_entries}</div>
+                <div class="stat-label">Total entries</div>
+              </div>
+            </div>
+
+            <div class="stat">
+              <div class="stat-icon error">!</div>
+              <div>
+                <div class="stat-value">${errors}</div>
+                <div class="stat-label">Errors</div>
+              </div>
+            </div>
+
+            <div class="stat">
+              <div class="stat-icon warning">!</div>
+              <div>
+                <div class="stat-value">${warnings}</div>
+                <div class="stat-label">Warnings</div>
+              </div>
+            </div>
+
+            <div class="stat">
+              <div class="stat-icon">i</div>
+              <div>
+                <div class="stat-value">${info}</div>
+                <div class="stat-label">Info</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Most repeated messages</th>
+                  <th>Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  summary.top_message_clusters.length
+                    ? summary.top_message_clusters.map((item) => `
+                        <tr>
+                          <td>${escapeHtml(item.message)}</td>
+                          <td>${item.count}</td>
+                        </tr>
+                      `).join("")
+                    : `<tr><td colspan="2">No repeated messages found.</td></tr>`
+                }
+              </tbody>
+            </table>
+          </div>
+        `;
+      } catch (error) {
+        container.className = "empty";
+        container.textContent = error.message;
+      }
+    }
+
+    async function loadAnalytics() {
+      try {
+        const data = await api("/analytics/summary");
+
+        $("analytics").innerHTML = `
+          <div class="stat">
+            <div class="stat-icon">?</div>
+            <div>
+              <div class="stat-value">${data.total_questions}</div>
+              <div class="stat-label">Questions asked</div>
+            </div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-icon">R</div>
+            <div>
+              <div class="stat-value">${data.documents.runbooks}</div>
+              <div class="stat-label">Runbooks</div>
+            </div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-icon">C</div>
+            <div>
+              <div class="stat-value">${data.total_chunks}</div>
+              <div class="stat-label">Indexed chunks</div>
+            </div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-icon">L</div>
+            <div>
+              <div class="stat-value">${data.total_log_entries}</div>
+              <div class="stat-label">Log entries</div>
+            </div>
+          </div>
+        `;
+      } catch {
+        $("analytics").innerHTML = `<div class="empty">Usage summary is unavailable.</div>`;
+      }
+    }
+
+    const dropZone = $("dropZone");
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropZone.classList.add("dragging");
+      });
+    });
+
+    ["dragleave", "drop"].forEach((eventName) => {
+      dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropZone.classList.remove("dragging");
+      });
+    });
+
+    dropZone.addEventListener("drop", (event) => {
+      if (event.dataTransfer.files.length) {
+        $("uploadFile").files = event.dataTransfer.files;
+      }
+    });
+
+    $("question").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        askQuestion();
+      }
+    });
+
+    if (state.token) {
+      startApp();
+    } else {
+      $("authGate").classList.remove("hidden");
+    }
+  </script>
+</body>
+</html>

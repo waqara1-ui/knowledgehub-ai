@@ -6,9 +6,10 @@ from sqlalchemy.sql import func
 from config import settings
 from database import Base
 
+from pgvector.sqlalchemy import Vector
+
 # Uses pgvector with Postgres and text storage with SQLite.
 if settings.use_pgvector:
-    from pgvector.sqlalchemy import Vector
     EmbeddingType = Vector(settings.EMBEDDING_DIM)
 else:
     EmbeddingType = Text

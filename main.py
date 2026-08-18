@@ -802,6 +802,134 @@ def retrieve_relevant_chunks(
     return [s for s in scored if s["similarity"] >= threshold]
 
 
+
+def retrieve_relevant_log_patterns(
+    db: Session,
+    query: str,
+    incident: models.Incident,
+    top_k: int = 5,
+) -> list[dict]:
+    """
+    Find related historical log patterns for the current incident.
+
+    This is intentionally lightweight: it groups repeated uploaded log messages
+    and ranks them by keyword overlap, severity, and frequency. Runbooks remain
+    the primary grounded source; logs are supporting historical evidence.
+    """
+    search_text = " ".join(
+        [
+            query,
+            incident.title or "",
+            incident.description or "",
+        ]
+    ).lower()
+
+    stop_words = {
+        "the", "a", "an", "and", "or", "is", "are", "was", "were",
+        "to", "of", "in", "on", "for", "with", "what", "why", "how",
+        "do", "does", "did", "this", "that", "it", "my", "our",
+    }
+
+    search_terms = {
+        word
+        for word in re.findall(r"[a-zA-Z0-9_-]+", search_text)
+        if len(word) >= 3 and word not in stop_words
+    }
+
+    if not search_terms:
+        return []
+
+    rows = (
+        db.query(
+            models.LogEntry.message,
+            models.LogEntry.level,
+            models.Document.id.label("document_id"),
+            models.Document.title.label("document_title"),
+            func.count(models.LogEntry.id).label("occurrence_count"),
+            func.max(models.LogEntry.timestamp).label("latest_timestamp"),
+        )
+        .join(
+            models.Document,
+            models.Document.id == models.LogEntry.document_id,
+        )
+        .filter(models.Document.type == models.DocumentType.LOG)
+        .group_by(
+            models.LogEntry.message,
+            models.LogEntry.level,
+            models.Document.id,
+            models.Document.title,
+        )
+        .all()
+    )
+
+    level_weights = {
+        "FATAL": 4,
+        "CRITICAL": 4,
+        "ERROR": 3,
+        "ERR": 3,
+        "WARN": 2,
+        "WARNING": 2,
+        "INFO": 0,
+        "DEBUG": 0,
+    }
+
+    scored_patterns = []
+
+    for row in rows:
+        message = row.message or ""
+        message_terms = set(re.findall(r"[a-zA-Z0-9_-]+", message.lower()))
+        matching_terms = search_terms.intersection(message_terms)
+
+        if not matching_terms:
+            continue
+
+        level = (row.level or "UNKNOWN").upper()
+        score = (
+            len(matching_terms) * 3
+            + level_weights.get(level, 1)
+            + min(int(row.occurrence_count or 0), 10) * 0.1
+        )
+
+        scored_patterns.append(
+            {
+                "score": round(score, 2),
+                "message": message,
+                "level": level,
+                "occurrence_count": int(row.occurrence_count or 0),
+                "document_id": row.document_id,
+                "document_title": row.document_title,
+                "latest_timestamp": (
+                    row.latest_timestamp.isoformat()
+                    if row.latest_timestamp
+                    else None
+                ),
+                "matching_terms": sorted(matching_terms),
+            }
+        )
+
+    scored_patterns.sort(key=lambda item: item["score"], reverse=True)
+    return scored_patterns[:top_k]
+
+
+def build_log_context(log_patterns: list[dict]) -> str:
+    """Format related historical log patterns for the LLM prompt."""
+    if not log_patterns:
+        return "No related historical log patterns were found."
+
+    sections = []
+    for index, pattern in enumerate(log_patterns, start=1):
+        sections.append(
+            f"[Historical Log Pattern {index}]\n"
+            f"Source file: {pattern['document_title']}\n"
+            f"Level: {pattern['level']}\n"
+            f"Message: {pattern['message']}\n"
+            f"Occurrences: {pattern['occurrence_count']}\n"
+            f"Most recent occurrence: "
+            f"{pattern['latest_timestamp'] or 'unknown'}"
+        )
+
+    return "\n\n".join(sections)
+
 @app.post("/admin/upload", status_code=status.HTTP_201_CREATED)
 async def upload_document(
     title: Annotated[str, Form(...)] ,
@@ -1119,6 +1247,16 @@ async def ask_incident_assistant(
         retrieve_relevant_chunks, db, question, top_k
     )
 
+    # Searching previously uploaded logs for related historical patterns.
+    relevant_log_patterns = await asyncio.to_thread(
+        retrieve_relevant_log_patterns,
+        db,
+        question,
+        incident,
+        5,
+    )
+    log_context = build_log_context(relevant_log_patterns)
+
     if relevant_chunks:
         context_block, citations = llm.build_context_block(relevant_chunks)
         system_prompt = llm.GROUNDED_SYSTEM_PROMPT
@@ -1126,22 +1264,42 @@ async def ask_incident_assistant(
             f"Incident: {incident.title}\n"
             f"Incident description: {incident.description or 'not provided'}\n\n"
             f"Question: {question}\n\n"
-            f"Runbook context:\n{context_block}"
+            f"Official runbook context:\n{context_block}\n\n"
+            f"Related historical log patterns:\n{log_context}\n\n"
+            "Use the runbook as the primary troubleshooting source. "
+            "Use historical logs only as supporting evidence about patterns "
+            "that occurred before. Do not claim a historical pattern is the "
+            "confirmed cause of the current incident."
         )
         grounded = True
-        message = "Answer generated from runbook context."
+        message = (
+            "Answer generated from runbook context and related historical "
+            "log patterns."
+            if relevant_log_patterns
+            else "Answer generated from runbook context."
+        )
     else:
         context_block, citations = "", []
         system_prompt = llm.UNGROUNDED_SYSTEM_PROMPT
         user_prompt = (
             f"Incident: {incident.title}\n"
+            f"Incident description: {incident.description or 'not provided'}\n\n"
             f"Question: {question}\n\n"
-            "No runbook context was retrieved."
+            "No relevant runbook guidance was retrieved.\n\n"
+            f"Related historical log patterns:\n{log_context}\n\n"
+            "Historical logs are supporting evidence only. Explain that no "
+            "official runbook guidance was found, and do not present a "
+            "historical pattern as the confirmed cause of the current incident."
         )
         grounded = False
         message = (
-            "No runbook content cleared the similarity threshold "
-            f"({settings.SIMILARITY_THRESHOLD}). Answer is general guidance only."
+            "No runbook content cleared the similarity threshold. "
+            "Related historical log patterns were included as supporting evidence."
+            if relevant_log_patterns
+            else (
+                "No runbook content or related historical log patterns were found. "
+                "Answer is general guidance only."
+            )
         )
 
     result = await llm.generate(system_prompt, user_prompt)
@@ -1176,7 +1334,9 @@ async def ask_incident_assistant(
             "backend": "pgvector" if settings.use_pgvector else "python",
             "threshold": settings.SIMILARITY_THRESHOLD,
             "chunks_used": len(citations),
+            "historical_log_patterns_used": len(relevant_log_patterns),
         },
+        "historical_log_patterns": relevant_log_patterns,
         "message": message,
     }
 

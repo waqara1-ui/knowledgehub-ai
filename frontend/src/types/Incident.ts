@@ -7,3 +7,8 @@ export type Incident = {
   created_at: string
   creator_id: number
 }
+
+export type IncidentListResponse = {
+  count: number
+  incidents: Incident[]
+}

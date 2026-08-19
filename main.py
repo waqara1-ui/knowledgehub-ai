@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
+from fastapi.middleware.cors import CORSMiddleware #to connect origins (react , Fastapi)
 import os
 import uuid
 import re  # for log parsing
@@ -108,6 +109,14 @@ app = FastAPI(
     description="AI-powered incident investigation and log analysis assistant.",
     version="0.2.0",
     lifespan=lifespan,
+)
+
+app.add_middleware( 
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  #allowing React development 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 if settings.cors_origin_list:

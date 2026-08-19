@@ -1,7 +1,9 @@
 """Configuration for LogLensAI 
 Everything that chages between laptop, cloud, is read from environment variables. I'm getting rid of hard code"""
 import os
- 
+from dotenv import load_dotenv
+
+load_dotenv()
 #Reading an environment variable and converting to bool
 def _get_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
@@ -26,13 +28,12 @@ def _get_float(name: str, default: float) -> float:
  
  
 class Settings:
-    # Database -----------------------------------------------------------
-    # Using Postgres:  postgresql+psycopg://loglens:loglens@db:5432/loglens
+    # Postgres:  postgresql+psycopg://loglens:loglens@db:5432/loglens
     DATABASE_URL: str = os.environ.get(
         "DATABASE_URL", "sqlite:///./policy_assistant.db"
     )
  
-    # --- Authorization --------------------------------------------------
+    # Authorization 
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = _get_int("ACCESS_TOKEN_EXPIRE_MINUTES", 60)
@@ -46,7 +47,7 @@ class Settings:
     BOOTSTRAP_ADMIN_EMAIL: str = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "")
     BOOTSTRAP_ADMIN_PASSWORD: str = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")
  
-    # --- Embeddings ---------------------------------------------------------
+    # Embeddings 
     EMBEDDING_MODEL: str = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
     EMBEDDING_DIM: int = _get_int("EMBEDDING_DIM", 384)  # all-MiniLM-L6-v2 = 384
  
@@ -57,18 +58,18 @@ class Settings:
     SIMILARITY_THRESHOLD: float = _get_float("SIMILARITY_THRESHOLD", 0.35)
     TOP_K_CHUNKS: int = _get_int("TOP_K_CHUNKS", 5)
  
-    # --- Chunking -----------------------------------------------------------
+    #  Chunking 
     # Since all-MiniLM-L6-v2 has a 256 token input limit which is roughly 1000
     # characters. Anything past that is silently truncated when the chunk is
     # embedded, so a larger chunk does not fail loudly, it just becomes partly
     # invisible to search. 
     # So keeping this under the limit. 
-    # Note: Raise the token limit if I later switch to a longer context embedding model
+    # raise the token limit if later switch to a longer context embedding model
     CHUNK_MAX_CHARS: int = _get_int("CHUNK_MAX_CHARS", 800)
     CHUNK_OVERLAP_CHARS: int = _get_int("CHUNK_OVERLAP_CHARS", 120)
  
-    # --- LLM ----------------------------------------------------------------
-    # One of: mock | ollama | gemini | openai_compatible
+    # LLM 
+    # mock | ollama | gemini | openai_compatible
     LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "mock").strip().lower()
     LLM_MODEL: str = os.environ.get("LLM_MODEL", "")
     LLM_API_KEY: str = os.environ.get("LLM_API_KEY", "")
@@ -78,13 +79,9 @@ class Settings:
     #temp = 0.2, Node: change it if needed after testing
     LLM_TEMPERATURE: float = _get_float("LLM_TEMPERATURE", 0.2)
  
-    # --- CORS ---------------------------------------------------------------
-    # It's usually comma separated. 
-    # Only needed if the front end is served from a different origin than the API. 
-    # The bundled front end is same origin, so this is empty by default.
+    
     CORS_ORIGINS: str = os.environ.get("CORS_ORIGINS", "")
  
-    # --- Derived ------------------------------------------------------------
     @property
     def is_postgres(self) -> bool:
         return self.DATABASE_URL.startswith("postgres")

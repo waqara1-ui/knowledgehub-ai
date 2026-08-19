@@ -1,7 +1,7 @@
 type IncidentCardProps = {
   title: string
-  description?: string
-  severity?: string
+  description: string | null
+  severity: string | null
   status: string
 }
 

@@ -1,35 +1,47 @@
 import './App.css'
 import IncidentCard from './components/IncidentCard'
+import LoginForm from './components/LoginForm'
 import { useEffect, useState } from 'react'
 import type { Incident, IncidentListResponse } from './types/Incident'
 
 function App() {
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [token, setToken] = useState<string | null>(null)
+  const [loginError, setLoginError] = useState('')
 
-  // Temporary login function
-  function login() {
+  function login(username: string, password: string) {
+    setLoginError('')
+
     fetch('http://localhost:8000/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        username: 'loglens_test',
-        password: 'TestPassword123!',
+        username,
+        password,
       }),
     })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Invalid username or password')
+        }
+
+        return response.json()
+      })
       .then((data) => {
         setToken(data.access_token)
       })
+      .catch((error) => {
+        setLoginError(error.message)
+      })
   }
 
-  // Fetch incidents after we have a token
   useEffect(() => {
     if (!token) {
       return
     }
+
     fetch('http://localhost:8000/incidents?limit=50', {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -40,6 +52,10 @@ function App() {
         setIncidents(data.incidents)
       })
   }, [token])
+
+  if (!token) {
+    return <LoginForm onLogin={login} error={loginError} />
+  }
 
   return (
     <div className="app">
@@ -56,8 +72,6 @@ function App() {
       <main className="main-content">
         <h1>Incident Investigation</h1>
         <p>Investigate and analyze system incidents with AI.</p>
-
-        <button onClick={login}>Login</button>
 
         {incidents.map((incident) => (
           <IncidentCard

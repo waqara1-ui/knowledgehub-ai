@@ -3,9 +3,10 @@ import { useState } from 'react'
 type LoginFormProps = {
   onLogin: (username: string, password: string) => void
   error: string
+  isLoggingIn: boolean
 }
 
-function LoginForm({ onLogin, error }: LoginFormProps) {
+function LoginForm({ onLogin, error, isLoggingIn }: LoginFormProps) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
@@ -38,7 +39,9 @@ function LoginForm({ onLogin, error }: LoginFormProps) {
           onChange={(event) => setPassword(event.target.value)}
         />
 
-        <button type="submit">Sign In</button>
+        <button type="submit" disabled={isLoggingIn}>
+          {isLoggingIn ? 'Signing in...' : 'Sign In'}
+        </button>
 
         {error && <p className="login-error">{error}</p>}
       </form>

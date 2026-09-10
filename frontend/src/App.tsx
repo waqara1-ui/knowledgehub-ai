@@ -1,42 +1,57 @@
+import { useEffect, useState } from 'react'
 import './App.css'
+
 import IncidentCard from './components/IncidentCard'
 import LoginForm from './components/LoginForm'
-import { useEffect, useState } from 'react'
+
 import type { Incident, IncidentListResponse } from './types/Incident'
 import type { Document, DocumentListResponse } from './types/Document'
 import type { User } from './types/User'
 import type { AnalyticsSummary } from './types/Analytics'
-
-type AskResponse = {
-  incident_id: number
-  question: string
-  answer: string
-  message?: string
-}
+import type { InvestigationResponse } from './types/Investigation'
 
 function App() {
-  const [incidents, setIncidents] = useState<Incident[]>([])
-  const [token, setToken] = useState<string | null>(null)
+  const [token, setToken] = useState<string | null>(
+    localStorage.getItem('token')
+  )
+
+  const [user, setUser] = useState<User | null>(null)
 
   const [loginError, setLoginError] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
 
-  const [user, setUser] = useState<User | null>(null)
+  const [currentPage, setCurrentPage] = useState<
+    'incidents' | 'documents' | 'analytics'
+  >('incidents')
 
+  const [incidents, setIncidents] = useState<Incident[]>([])
   const [isLoadingIncidents, setIsLoadingIncidents] = useState(false)
+  const [incidentsError, setIncidentsError] = useState('')
 
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null)
-  const [isLoadingSelectedIncident, setIsLoadingSelectedIncident] =
-    useState(false)
-  const [selectedIncidentError, setSelectedIncidentError] = useState('')
+  const [selectedIncident, setSelectedIncident] =
+    useState<Incident | null>(null)
+
+  const [
+    isLoadingSelectedIncident,
+    setIsLoadingSelectedIncident,
+  ] = useState(false)
+
+  const [selectedIncidentError, setSelectedIncidentError] =
+    useState('')
 
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
-  const [askError, setAskError] = useState('')
   const [isAsking, setIsAsking] = useState(false)
+  const [askError, setAskError] = useState('')
+
+  const [
+    investigationResult,
+    setInvestigationResult,
+  ] = useState<InvestigationResponse | null>(null)
 
   const [documents, setDocuments] = useState<Document[]>([])
-  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false)
+  const [isLoadingDocuments, setIsLoadingDocuments] =
+    useState(false)
   const [documentsError, setDocumentsError] = useState('')
 
   const [uploadTitle, setUploadTitle] = useState('')
@@ -45,17 +60,17 @@ function App() {
   const [uploadError, setUploadError] = useState('')
   const [uploadMessage, setUploadMessage] = useState('')
 
-  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null)
-  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+  const [analytics, setAnalytics] =
+    useState<AnalyticsSummary | null>(null)
+
+  const [isLoadingAnalytics, setIsLoadingAnalytics] =
+    useState(false)
+
   const [analyticsError, setAnalyticsError] = useState('')
 
-  const [currentPage, setCurrentPage] = useState<
-    'incidents' | 'documents' | 'analytics'
-  >('incidents')
-
   function login(username: string, password: string) {
-    setLoginError('')
     setIsLoggingIn(true)
+    setLoginError('')
 
     fetch('http://localhost:8000/auth/login', {
       method: 'POST',
@@ -75,6 +90,7 @@ function App() {
         return response.json()
       })
       .then((data) => {
+        localStorage.setItem('token', data.access_token)
         setToken(data.access_token)
       })
       .catch((error) => {
@@ -85,17 +101,35 @@ function App() {
       })
   }
 
+  function logout() {
+    localStorage.removeItem('token')
+    setToken(null)
+    setUser(null)
+
+    setIncidents([])
+    setDocuments([])
+    setAnalytics(null)
+
+    setSelectedIncident(null)
+    setAnswer('')
+    setQuestion('')
+    setInvestigationResult(null)
+
+    setCurrentPage('incidents')
+  }
+
   function selectIncident(incidentId: number) {
     if (!token) {
       return
     }
 
-    setSelectedIncidentError('')
     setIsLoadingSelectedIncident(true)
+    setSelectedIncidentError('')
 
-    setQuestion('')
     setAnswer('')
+    setQuestion('')
     setAskError('')
+    setInvestigationResult(null)
 
     fetch(`http://localhost:8000/incidents/${incidentId}`, {
       headers: {
@@ -104,7 +138,7 @@ function App() {
     })
       .then((response) => {
         if (!response.ok) {
-          throw new Error('Could not load incident details')
+          throw new Error('Could not load incident')
         }
 
         return response.json()
@@ -120,42 +154,50 @@ function App() {
       })
   }
 
-  function askIncident() {
-    if (!token || !selectedIncident) {
+  function backToIncidents() {
+    setSelectedIncident(null)
+    setSelectedIncidentError('')
+    setAnswer('')
+    setQuestion('')
+    setAskError('')
+    setInvestigationResult(null)
+  }
+
+  function askIncident(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!token || !selectedIncident || !question.trim()) {
       return
     }
 
-    if (!question.trim()) {
-      setAskError('Please enter a question')
-      return
-    }
-
+    setIsAsking(true)
     setAskError('')
     setAnswer('')
-    setIsAsking(true)
+    setInvestigationResult(null)
 
     const formData = new FormData()
     formData.append('question', question)
 
     fetch(
-      `http://localhost:8000/incidents/${selectedIncident.id}/ask`,
+      `http://localhost:8000/incidents/${selectedIncident.id}/ask?top_k_chunks=5`,
       {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
         },
         body: formData,
-      },
+      }
     )
       .then((response) => {
         if (!response.ok) {
-          throw new Error('Could not get an AI response')
+          throw new Error('Could not generate investigation response')
         }
 
         return response.json()
       })
-      .then((data: AskResponse) => {
+      .then((data: InvestigationResponse) => {
         setAnswer(data.answer)
+        setInvestigationResult(data)
       })
       .catch((error) => {
         setAskError(error.message)
@@ -165,22 +207,18 @@ function App() {
       })
   }
 
-  function backToIncidents() {
+  function goToPage(
+    page: 'incidents' | 'documents' | 'analytics'
+  ) {
+    setCurrentPage(page)
+
     setSelectedIncident(null)
+    setSelectedIncidentError('')
+
     setQuestion('')
     setAnswer('')
     setAskError('')
-  }
-
-  function goToPage(page: 'incidents' | 'documents' | 'analytics') {
-    setCurrentPage(page)
-
-    if (page !== 'incidents') {
-      setSelectedIncident(null)
-      setQuestion('')
-      setAnswer('')
-      setAskError('')
-    }
+    setInvestigationResult(null)
   }
 
   function loadDocuments() {
@@ -214,24 +252,18 @@ function App() {
       })
   }
 
-  function uploadDocument() {
-    if (!token) {
+  function uploadDocument(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault()
+
+    if (!token || !uploadFile || !uploadTitle.trim()) {
       return
     }
 
-    if (!uploadTitle.trim()) {
-      setUploadError('Please enter a document title')
-      return
-    }
-
-    if (!uploadFile) {
-      setUploadError('Please choose a file')
-      return
-    }
-
+    setIsUploading(true)
     setUploadError('')
     setUploadMessage('')
-    setIsUploading(true)
 
     const formData = new FormData()
     formData.append('title', uploadTitle)
@@ -244,19 +276,28 @@ function App() {
       },
       body: formData,
     })
-      .then(async (response) => {
-        const data = await response.json()
-
+      .then((response) => {
         if (!response.ok) {
-          throw new Error(data.detail || 'Could not upload document')
+          throw new Error('Could not upload document')
         }
 
-        return data
+        return response.json()
       })
       .then((data) => {
-        setUploadMessage(`${data.title} uploaded successfully`)
+        setUploadMessage(
+          `${data.title ?? uploadTitle} uploaded successfully`
+        )
+
         setUploadTitle('')
         setUploadFile(null)
+
+        const fileInput = document.getElementById(
+          'document-file'
+        ) as HTMLInputElement | null
+
+        if (fileInput) {
+          fileInput.value = ''
+        }
 
         loadDocuments()
       })
@@ -288,19 +329,22 @@ function App() {
       .then((data: User) => {
         setUser(data)
       })
-      .catch((error) => {
-        console.error(error)
+      .catch(() => {
+        localStorage.removeItem('token')
+        setToken(null)
+        setUser(null)
       })
   }, [token])
 
   useEffect(() => {
-    if (!token) {
+    if (!token || currentPage !== 'incidents') {
       return
     }
 
     setIsLoadingIncidents(true)
+    setIncidentsError('')
 
-    fetch('http://localhost:8000/incidents?limit=50', {
+    fetch('http://localhost:8000/incidents', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -315,10 +359,13 @@ function App() {
       .then((data: IncidentListResponse) => {
         setIncidents(data.incidents)
       })
+      .catch((error) => {
+        setIncidentsError(error.message)
+      })
       .finally(() => {
         setIsLoadingIncidents(false)
       })
-  }, [token])
+  }, [token, currentPage])
 
   useEffect(() => {
     if (!token || currentPage !== 'documents') {
@@ -374,105 +421,220 @@ function App() {
       <aside className="sidebar">
         <h2>LogLens AI</h2>
 
-        <nav aria-label="Main navigation">
+        <nav>
           <button
-            type="button"
+            className={
+              currentPage === 'incidents'
+                ? 'nav-button active'
+                : 'nav-button'
+            }
             onClick={() => goToPage('incidents')}
           >
             Incidents
           </button>
 
           <button
-            type="button"
+            className={
+              currentPage === 'documents'
+                ? 'nav-button active'
+                : 'nav-button'
+            }
             onClick={() => goToPage('documents')}
           >
             Documents
           </button>
 
           <button
-            type="button"
+            className={
+              currentPage === 'analytics'
+                ? 'nav-button active'
+                : 'nav-button'
+            }
             onClick={() => goToPage('analytics')}
           >
             Analytics
           </button>
         </nav>
+
+        <div className="sidebar-bottom">
+          {user && (
+            <p className="signed-in-user">
+              Signed in as {user.username}
+            </p>
+          )}
+
+          <button className="logout-button" onClick={logout}>
+            Log Out
+          </button>
+        </div>
       </aside>
 
       <main className="main-content">
         {currentPage === 'incidents' && (
           <>
-            <h1>Incident Investigation</h1>
-            <p>Investigate and analyze system incidents with AI.</p>
-
             {isLoadingSelectedIncident ? (
               <p>Loading incident...</p>
             ) : selectedIncidentError ? (
-              <p>{selectedIncidentError}</p>
+              <p className="error-message">
+                {selectedIncidentError}
+              </p>
             ) : selectedIncident ? (
-              <div className="selected-incident">
+              <>
                 <button
-                  type="button"
+                  className="back-button"
                   onClick={backToIncidents}
                 >
-                  Back to incidents
+                  ← Back to incidents
                 </button>
 
-                <h2>{selectedIncident.title}</h2>
+                <h1>{selectedIncident.title}</h1>
 
                 {selectedIncident.description && (
                   <p>{selectedIncident.description}</p>
                 )}
 
-                {selectedIncident.severity && (
-                  <p>Severity: {selectedIncident.severity}</p>
-                )}
+                <div className="incident-details">
+                  <p>
+                    <strong>Status:</strong>{' '}
+                    {selectedIncident.status}
+                  </p>
 
-                <p>Status: {selectedIncident.status}</p>
+                  {selectedIncident.severity && (
+                    <p>
+                      <strong>Severity:</strong>{' '}
+                      {selectedIncident.severity}
+                    </p>
+                  )}
 
-                <label htmlFor="incident-question">
-                  Ask about this incident
-                </label>
+                  <p>
+                    <strong>Created:</strong>{' '}
+                    {new Date(
+                      selectedIncident.created_at
+                    ).toLocaleString()}
+                  </p>
+                </div>
 
-                <input
-                  id="incident-question"
-                  type="text"
-                  placeholder="What caused this incident?"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                />
+                <section className="investigation-section">
+                  <h2>AI Investigation</h2>
 
-                <button
-                  type="button"
-                  onClick={askIncident}
-                  disabled={isAsking}
-                >
-                  {isAsking ? 'Investigating...' : 'Ask AI'}
-                </button>
+                  <form
+                    className="investigation-form"
+                    onSubmit={askIncident}
+                  >
+                    <label htmlFor="incident-question">
+                      Ask a question about this incident
+                    </label>
 
-                {askError && (
-                  <p className="ask-error">{askError}</p>
-                )}
+                    <textarea
+                      id="incident-question"
+                      value={question}
+                      onChange={(event) =>
+                        setQuestion(event.target.value)
+                      }
+                      placeholder="Example: What is the likely cause of this timeout?"
+                      rows={4}
+                    />
 
-                {answer && (
-                  <div className="ai-answer">
-                    <h3>AI Investigation</h3>
-                    <p>{answer}</p>
+                    <button
+                      type="submit"
+                      disabled={isAsking || !question.trim()}
+                    >
+                      {isAsking
+                        ? 'Investigating...'
+                        : 'Ask AI'}
+                    </button>
+                  </form>
+
+                  {askError && (
+                    <p className="error-message">{askError}</p>
+                  )}
+
+                  {answer && (
+                    <div className="answer-card">
+                      <h3>Answer</h3>
+                      <p>{answer}</p>
+
+                      {investigationResult && (
+                        <p className="grounding-status">
+                          {investigationResult.grounded
+                            ? 'Grounded in retrieved runbook context'
+                            : 'Response was not grounded in retrieved context'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {investigationResult &&
+                    investigationResult.citations.length > 0 && (
+                      <div className="citations">
+                        <h3>Sources</h3>
+
+                        {investigationResult.citations
+                          .filter((citation) =>
+                            answer.includes(
+                              `[${citation.source_number}]`
+                            )
+                          )
+                          .map((citation) => (
+                            <div
+                              key={citation.chunk_id}
+                              className="citation-card"
+                            >
+                              <p className="citation-title">
+                                [{citation.source_number}]{' '}
+                                {citation.document_title}
+                              </p>
+
+                              <p>
+                                Chunk {citation.chunk_order}
+                              </p>
+
+                              <p>
+                                Similarity:{' '}
+                                {(
+                                  citation.similarity * 100
+                                ).toFixed(1)}
+                                %
+                              </p>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                </section>
+              </>
+            ) : (
+              <>
+                <h1>Incident Investigation</h1>
+                <p>
+                  Select an incident to investigate logs,
+                  runbooks, and likely causes.
+                </p>
+
+                {isLoadingIncidents ? (
+                  <p>Loading incidents...</p>
+                ) : incidentsError ? (
+                  <p className="error-message">
+                    {incidentsError}
+                  </p>
+                ) : incidents.length === 0 ? (
+                  <p>No incidents found.</p>
+                ) : (
+                  <div className="incident-list">
+                    {incidents.map((incident) => (
+                      <IncidentCard
+                        key={incident.id}
+                        title={incident.title}
+                        description={incident.description}
+                        severity={incident.severity}
+                        status={incident.status}
+                        onSelect={() =>
+                          selectIncident(incident.id)
+                        }
+                      />
+                    ))}
                   </div>
                 )}
-              </div>
-            ) : isLoadingIncidents ? (
-              <p>Loading incidents...</p>
-            ) : (
-              incidents.map((incident) => (
-                <IncidentCard
-                  key={incident.id}
-                  title={incident.title}
-                  description={incident.description}
-                  severity={incident.severity}
-                  status={incident.status}
-                  onSelect={() => selectIncident(incident.id)}
-                />
-              ))
+              </>
             )}
           </>
         )}
@@ -480,10 +642,16 @@ function App() {
         {currentPage === 'documents' && (
           <>
             <h1>Documents</h1>
-            <p>View and manage documents used by LogLens AI.</p>
+            <p>
+              Review the runbooks and logs available to
+              LogLens AI.
+            </p>
 
-            {user?.is_admin && (
-              <div className="upload-section">
+            {user?.is_admin ? (
+              <form
+                className="upload-form"
+                onSubmit={uploadDocument}
+              >
                 <h2>Upload Document</h2>
 
                 <label htmlFor="document-title">
@@ -493,9 +661,11 @@ function App() {
                 <input
                   id="document-title"
                   type="text"
-                  placeholder="Platform Incident Runbook"
                   value={uploadTitle}
-                  onChange={(event) => setUploadTitle(event.target.value)}
+                  onChange={(event) =>
+                    setUploadTitle(event.target.value)
+                  }
+                  placeholder="Example: API Timeout Runbook"
                 />
 
                 <label htmlFor="document-file">
@@ -505,42 +675,54 @@ function App() {
                 <input
                   id="document-file"
                   type="file"
-                  accept=".pdf,.txt,.md,.log,.jsonl,.ndjson"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0] || null
-                    setUploadFile(file)
-                  }}
+                  onChange={(event) =>
+                    setUploadFile(
+                      event.target.files?.[0] ?? null
+                    )
+                  }
                 />
 
                 <button
-                  type="button"
-                  onClick={uploadDocument}
-                  disabled={isUploading}
+                  type="submit"
+                  disabled={
+                    isUploading ||
+                    !uploadTitle.trim() ||
+                    !uploadFile
+                  }
                 >
-                  {isUploading ? 'Uploading...' : 'Upload Document'}
+                  {isUploading
+                    ? 'Uploading...'
+                    : 'Upload Document'}
                 </button>
 
                 {uploadError && (
-                  <p className="upload-error">{uploadError}</p>
+                  <p className="error-message">
+                    {uploadError}
+                  </p>
                 )}
 
                 {uploadMessage && (
-                  <p className="upload-success">{uploadMessage}</p>
+                  <p className="success-message">
+                    {uploadMessage}
+                  </p>
                 )}
-              </div>
-            )}
-
-            {user && !user.is_admin && (
+              </form>
+            ) : (
               <p>
-                You are signed in as a standard user. Document uploads
-                require administrator access.
+                You are signed in as a standard user.
+                Document uploads require administrator
+                access.
               </p>
             )}
+
+            <h2>Knowledge Base</h2>
 
             {isLoadingDocuments ? (
               <p>Loading documents...</p>
             ) : documentsError ? (
-              <p>{documentsError}</p>
+              <p className="error-message">
+                {documentsError}
+              </p>
             ) : documents.length === 0 ? (
               <p>No documents found.</p>
             ) : (
@@ -550,17 +732,27 @@ function App() {
                   className="document-card"
                 >
                   <h3>{document.title}</h3>
-                  <p>Type: {document.type}</p>
-                  <p>Status: {document.status}</p>
 
                   <p>
-                    Uploaded:{' '}
-                    {new Date(document.uploaded_at).toLocaleString()}
+                    <strong>Type:</strong> {document.type}
                   </p>
 
-                  {document.chunk_count !== null && (
-                    <p>Chunks: {document.chunk_count}</p>
-                  )}
+                  <p>
+                    <strong>Status:</strong>{' '}
+                    {document.status}
+                  </p>
+
+                  <p>
+                    <strong>Uploaded:</strong>{' '}
+                    {new Date(
+                      document.uploaded_at
+                    ).toLocaleString()}
+                  </p>
+
+                  <p>
+                    <strong>Chunks:</strong>{' '}
+                    {document.chunk_count ?? 'N/A'}
+                  </p>
                 </div>
               ))
             )}
@@ -570,12 +762,16 @@ function App() {
         {currentPage === 'analytics' && (
           <>
             <h1>Analytics</h1>
-            <p>Review incident and investigation analytics.</p>
+            <p>
+              Review incident and investigation analytics.
+            </p>
 
             {isLoadingAnalytics ? (
               <p>Loading analytics...</p>
             ) : analyticsError ? (
-              <p>{analyticsError}</p>
+              <p className="error-message">
+                {analyticsError}
+              </p>
             ) : analytics ? (
               <>
                 <div className="analytics-grid">
@@ -587,7 +783,10 @@ function App() {
                   <div className="analytics-card">
                     <h3>Helpful Rate</h3>
                     <p>
-                      {(analytics.helpful_rate * 100).toFixed(1)}%
+                      {(
+                        analytics.helpful_rate * 100
+                      ).toFixed(1)}
+                      %
                     </p>
                   </div>
 
@@ -642,12 +841,16 @@ function App() {
                       className="recent-question"
                     >
                       <p>{item.question}</p>
+
                       <p>
                         Incident ID: {item.incident_id}
                       </p>
+
                       <p>
                         Answered:{' '}
-                        {new Date(item.answered_at).toLocaleString()}
+                        {new Date(
+                          item.answered_at
+                        ).toLocaleString()}
                       </p>
                     </div>
                   ))

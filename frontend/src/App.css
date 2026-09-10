@@ -81,3 +81,41 @@
   font: inherit;
   cursor: pointer;
 }
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+  margin-bottom: 28px;
+}
+
+.analytics-card {
+  border: 1px solid #d9dee8;
+  border-radius: 10px;
+  padding: 16px;
+  background: white;
+}
+
+.analytics-card h3 {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.analytics-card p {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.recent-question {
+  border: 1px solid #d9dee8;
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 12px;
+  background: white;
+}
+
+.recent-question p {
+  margin: 6px 0;
+}

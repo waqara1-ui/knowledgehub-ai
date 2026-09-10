@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import type { Incident, IncidentListResponse } from './types/Incident'
 import type { Document, DocumentListResponse } from './types/Document'
 import type { User } from './types/User'
+import type { AnalyticsSummary } from './types/Analytics'
 
 type AskResponse = {
   incident_id: number
@@ -43,6 +44,10 @@ function App() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const [uploadMessage, setUploadMessage] = useState('')
+
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null)
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+  const [analyticsError, setAnalyticsError] = useState('')
 
   const [currentPage, setCurrentPage] = useState<
     'incidents' | 'documents' | 'analytics'
@@ -323,6 +328,37 @@ function App() {
     loadDocuments()
   }, [token, currentPage])
 
+  useEffect(() => {
+    if (!token || currentPage !== 'analytics') {
+      return
+    }
+
+    setIsLoadingAnalytics(true)
+    setAnalyticsError('')
+
+    fetch('http://localhost:8000/analytics/summary', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not load analytics')
+        }
+
+        return response.json()
+      })
+      .then((data: AnalyticsSummary) => {
+        setAnalytics(data)
+      })
+      .catch((error) => {
+        setAnalyticsError(error.message)
+      })
+      .finally(() => {
+        setIsLoadingAnalytics(false)
+      })
+  }, [token, currentPage])
+
   if (!token) {
     return (
       <LoginForm
@@ -485,15 +521,11 @@ function App() {
                 </button>
 
                 {uploadError && (
-                  <p className="upload-error">
-                    {uploadError}
-                  </p>
+                  <p className="upload-error">{uploadError}</p>
                 )}
 
                 {uploadMessage && (
-                  <p className="upload-success">
-                    {uploadMessage}
-                  </p>
+                  <p className="upload-success">{uploadMessage}</p>
                 )}
               </div>
             )}
@@ -527,9 +559,7 @@ function App() {
                   </p>
 
                   {document.chunk_count !== null && (
-                    <p>
-                      Chunks: {document.chunk_count}
-                    </p>
+                    <p>Chunks: {document.chunk_count}</p>
                   )}
                 </div>
               ))
@@ -541,6 +571,91 @@ function App() {
           <>
             <h1>Analytics</h1>
             <p>Review incident and investigation analytics.</p>
+
+            {isLoadingAnalytics ? (
+              <p>Loading analytics...</p>
+            ) : analyticsError ? (
+              <p>{analyticsError}</p>
+            ) : analytics ? (
+              <>
+                <div className="analytics-grid">
+                  <div className="analytics-card">
+                    <h3>Total Questions</h3>
+                    <p>{analytics.total_questions}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Helpful Rate</h3>
+                    <p>
+                      {(analytics.helpful_rate * 100).toFixed(1)}%
+                    </p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Feedback Responses</h3>
+                    <p>{analytics.total_feedback}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Log Entries</h3>
+                    <p>{analytics.total_log_entries}</p>
+                  </div>
+                </div>
+
+                <h2>Knowledge Base</h2>
+
+                <div className="analytics-grid">
+                  <div className="analytics-card">
+                    <h3>Runbooks</h3>
+                    <p>{analytics.documents.runbooks}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Logs</h3>
+                    <p>{analytics.documents.logs}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Chunks</h3>
+                    <p>{analytics.total_chunks}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Helpful</h3>
+                    <p>{analytics.helpful_count}</p>
+                  </div>
+
+                  <div className="analytics-card">
+                    <h3>Unhelpful</h3>
+                    <p>{analytics.unhelpful_count}</p>
+                  </div>
+                </div>
+
+                <h2>Recent Questions</h2>
+
+                {analytics.recent_questions.length === 0 ? (
+                  <p>No recent questions found.</p>
+                ) : (
+                  analytics.recent_questions.map((item) => (
+                    <div
+                      key={item.id}
+                      className="recent-question"
+                    >
+                      <p>{item.question}</p>
+                      <p>
+                        Incident ID: {item.incident_id}
+                      </p>
+                      <p>
+                        Answered:{' '}
+                        {new Date(item.answered_at).toLocaleString()}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </>
+            ) : (
+              <p>No analytics available.</p>
+            )}
           </>
         )}
       </main>

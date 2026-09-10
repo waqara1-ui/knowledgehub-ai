@@ -49,6 +49,14 @@ function App() {
     setInvestigationResult,
   ] = useState<InvestigationResponse | null>(null)
 
+  const [isSubmittingFeedback, setIsSubmittingFeedback] =
+    useState(false)
+
+  const [feedbackError, setFeedbackError] = useState('')
+  const [feedbackMessage, setFeedbackMessage] = useState('')
+  const [selectedFeedback, setSelectedFeedback] =
+    useState<boolean | null>(null)
+
   const [documents, setDocuments] = useState<Document[]>([])
   const [isLoadingDocuments, setIsLoadingDocuments] =
     useState(false)
@@ -115,6 +123,10 @@ function App() {
     setQuestion('')
     setInvestigationResult(null)
 
+    setFeedbackError('')
+    setFeedbackMessage('')
+    setSelectedFeedback(null)
+
     setCurrentPage('incidents')
   }
 
@@ -130,6 +142,10 @@ function App() {
     setQuestion('')
     setAskError('')
     setInvestigationResult(null)
+
+    setFeedbackError('')
+    setFeedbackMessage('')
+    setSelectedFeedback(null)
 
     fetch(`http://localhost:8000/incidents/${incidentId}`, {
       headers: {
@@ -161,6 +177,10 @@ function App() {
     setQuestion('')
     setAskError('')
     setInvestigationResult(null)
+
+    setFeedbackError('')
+    setFeedbackMessage('')
+    setSelectedFeedback(null)
   }
 
   function askIncident(event: React.FormEvent<HTMLFormElement>) {
@@ -174,6 +194,10 @@ function App() {
     setAskError('')
     setAnswer('')
     setInvestigationResult(null)
+
+    setFeedbackError('')
+    setFeedbackMessage('')
+    setSelectedFeedback(null)
 
     const formData = new FormData()
     formData.append('question', question)
@@ -207,6 +231,51 @@ function App() {
       })
   }
 
+  function submitFeedback(isHelpful: boolean) {
+    if (!token || !investigationResult) {
+      return
+    }
+
+    setIsSubmittingFeedback(true)
+    setFeedbackError('')
+    setFeedbackMessage('')
+
+    fetch('http://localhost:8000/feedback', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        question_log_id: investigationResult.question_log_id,
+        is_helpful: isHelpful,
+        feedback_text: '',
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not submit feedback')
+        }
+
+        return response.json()
+      })
+      .then(() => {
+        setSelectedFeedback(isHelpful)
+
+        setFeedbackMessage(
+          isHelpful
+            ? 'Thanks for the feedback!'
+            : 'Thanks — your feedback was recorded.'
+        )
+      })
+      .catch((error) => {
+        setFeedbackError(error.message)
+      })
+      .finally(() => {
+        setIsSubmittingFeedback(false)
+      })
+  }
+
   function goToPage(
     page: 'incidents' | 'documents' | 'analytics'
   ) {
@@ -219,6 +288,10 @@ function App() {
     setAnswer('')
     setAskError('')
     setInvestigationResult(null)
+
+    setFeedbackError('')
+    setFeedbackMessage('')
+    setSelectedFeedback(null)
   }
 
   function loadDocuments() {
@@ -560,6 +633,56 @@ function App() {
                             ? 'Grounded in retrieved runbook context'
                             : 'Response was not grounded in retrieved context'}
                         </p>
+                      )}
+
+                      {investigationResult && (
+                        <div className="feedback-section">
+                          <p>Was this answer helpful?</p>
+
+                          <div className="feedback-buttons">
+                            <button
+                              type="button"
+                              className={
+                                selectedFeedback === true
+                                  ? 'feedback-button selected'
+                                  : 'feedback-button'
+                              }
+                              disabled={isSubmittingFeedback}
+                              onClick={() =>
+                                submitFeedback(true)
+                              }
+                            >
+                              Helpful
+                            </button>
+
+                            <button
+                              type="button"
+                              className={
+                                selectedFeedback === false
+                                  ? 'feedback-button selected'
+                                  : 'feedback-button'
+                              }
+                              disabled={isSubmittingFeedback}
+                              onClick={() =>
+                                submitFeedback(false)
+                              }
+                            >
+                              Not Helpful
+                            </button>
+                          </div>
+
+                          {feedbackMessage && (
+                            <p className="success-message">
+                              {feedbackMessage}
+                            </p>
+                          )}
+
+                          {feedbackError && (
+                            <p className="error-message">
+                              {feedbackError}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

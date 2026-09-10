@@ -4,15 +4,31 @@ import LoginForm from './components/LoginForm'
 import { useEffect, useState } from 'react'
 import type { Incident, IncidentListResponse } from './types/Incident'
 
+type AskResponse = {
+  incident_id: number
+  question: string
+  answer: string
+  message?: string
+}
+
 function App() {
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [token, setToken] = useState<string | null>(null)
+
   const [loginError, setLoginError] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+
   const [isLoadingIncidents, setIsLoadingIncidents] = useState(false)
+
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null)
-  const [isLoadingSelectedIncident, setIsLoadingSelectedIncident] = useState(false)
+  const [isLoadingSelectedIncident, setIsLoadingSelectedIncident] =
+    useState(false)
   const [selectedIncidentError, setSelectedIncidentError] = useState('')
+
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState('')
+  const [askError, setAskError] = useState('')
+  const [isAsking, setIsAsking] = useState(false)
 
   function login(username: string, password: string) {
     setLoginError('')
@@ -54,6 +70,10 @@ function App() {
     setSelectedIncidentError('')
     setIsLoadingSelectedIncident(true)
 
+    setQuestion('')
+    setAnswer('')
+    setAskError('')
+
     fetch(`http://localhost:8000/incidents/${incidentId}`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -75,6 +95,58 @@ function App() {
       .finally(() => {
         setIsLoadingSelectedIncident(false)
       })
+  }
+
+  function askIncident() {
+    if (!token || !selectedIncident) {
+      return
+    }
+
+    if (!question.trim()) {
+      setAskError('Please enter a question')
+      return
+    }
+
+    setAskError('')
+    setAnswer('')
+    setIsAsking(true)
+
+    const formData = new FormData()
+    formData.append('question', question)
+
+    fetch(
+      `http://localhost:8000/incidents/${selectedIncident.id}/ask`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      },
+    )
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not get an AI response')
+        }
+
+        return response.json()
+      })
+      .then((data: AskResponse) => {
+        setAnswer(data.answer)
+      })
+      .catch((error) => {
+        setAskError(error.message)
+      })
+      .finally(() => {
+        setIsAsking(false)
+      })
+  }
+
+  function backToIncidents() {
+    setSelectedIncident(null)
+    setQuestion('')
+    setAnswer('')
+    setAskError('')
   }
 
   useEffect(() => {
@@ -130,7 +202,7 @@ function App() {
           <p>{selectedIncidentError}</p>
         ) : selectedIncident ? (
           <div className="selected-incident">
-            <button onClick={() => setSelectedIncident(null)}>
+            <button onClick={backToIncidents}>
               Back to incidents
             </button>
 
@@ -145,6 +217,37 @@ function App() {
             )}
 
             <p>Status: {selectedIncident.status}</p>
+
+            <label htmlFor="incident-question">
+              Ask about this incident
+            </label>
+
+            <input
+              id="incident-question"
+              type="text"
+              placeholder="What caused this incident?"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+            />
+
+            <button
+              type="button"
+              onClick={askIncident}
+              disabled={isAsking}
+            >
+              {isAsking ? 'Investigating...' : 'Ask AI'}
+            </button>
+
+            {askError && (
+              <p className="ask-error">{askError}</p>
+            )}
+
+            {answer && (
+              <div className="ai-answer">
+                <h3>AI Investigation</h3>
+                <p>{answer}</p>
+              </div>
+            )}
           </div>
         ) : isLoadingIncidents ? (
           <p>Loading incidents...</p>

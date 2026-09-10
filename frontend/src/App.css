@@ -49,3 +49,35 @@
   border-radius: 8px;
   text-align: left;
 }
+
+.document-card {
+  border: 1px solid #d9dee8;
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 16px;
+  background: white;
+}
+
+.document-card h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.document-card p {
+  margin: 6px 0;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar nav button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 0;
+  font: inherit;
+  cursor: pointer;
+}

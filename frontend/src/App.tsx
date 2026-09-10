@@ -3,6 +3,7 @@ import IncidentCard from './components/IncidentCard'
 import LoginForm from './components/LoginForm'
 import { useEffect, useState } from 'react'
 import type { Incident, IncidentListResponse } from './types/Incident'
+import type { Document, DocumentListResponse } from './types/Document'
 
 type AskResponse = {
   incident_id: number
@@ -29,6 +30,14 @@ function App() {
   const [answer, setAnswer] = useState('')
   const [askError, setAskError] = useState('')
   const [isAsking, setIsAsking] = useState(false)
+
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false)
+  const [documentsError, setDocumentsError] = useState('')
+
+  const [currentPage, setCurrentPage] = useState<
+    'incidents' | 'documents' | 'analytics'
+  >('incidents')
 
   function login(username: string, password: string) {
     setLoginError('')
@@ -149,6 +158,17 @@ function App() {
     setAskError('')
   }
 
+  function goToPage(page: 'incidents' | 'documents' | 'analytics') {
+    setCurrentPage(page)
+
+    if (page !== 'incidents') {
+      setSelectedIncident(null)
+      setQuestion('')
+      setAnswer('')
+      setAskError('')
+    }
+  }
+
   useEffect(() => {
     if (!token) {
       return
@@ -161,7 +181,13 @@ function App() {
         Authorization: `Bearer ${token}`,
       },
     })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not load incidents')
+        }
+
+        return response.json()
+      })
       .then((data: IncidentListResponse) => {
         setIncidents(data.incidents)
       })
@@ -169,6 +195,37 @@ function App() {
         setIsLoadingIncidents(false)
       })
   }, [token])
+
+  useEffect(() => {
+    if (!token || currentPage !== 'documents') {
+      return
+    }
+
+    setIsLoadingDocuments(true)
+    setDocumentsError('')
+
+    fetch('http://localhost:8000/documents', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not load documents')
+        }
+
+        return response.json()
+      })
+      .then((data: DocumentListResponse) => {
+        setDocuments(data.documents)
+      })
+      .catch((error) => {
+        setDocumentsError(error.message)
+      })
+      .finally(() => {
+        setIsLoadingDocuments(false)
+      })
+  }, [token, currentPage])
 
   if (!token) {
     return (
@@ -186,82 +243,147 @@ function App() {
         <h2>LogLens AI</h2>
 
         <nav aria-label="Main navigation">
-          <a href="#">Incidents</a>
-          <a href="#">Documents</a>
-          <a href="#">Analytics</a>
+          <button
+            type="button"
+            onClick={() => goToPage('incidents')}
+          >
+            Incidents
+          </button>
+
+          <button
+            type="button"
+            onClick={() => goToPage('documents')}
+          >
+            Documents
+          </button>
+
+          <button
+            type="button"
+            onClick={() => goToPage('analytics')}
+          >
+            Analytics
+          </button>
         </nav>
       </aside>
 
       <main className="main-content">
-        <h1>Incident Investigation</h1>
-        <p>Investigate and analyze system incidents with AI.</p>
+        {currentPage === 'incidents' && (
+          <>
+            <h1>Incident Investigation</h1>
+            <p>Investigate and analyze system incidents with AI.</p>
 
-        {isLoadingSelectedIncident ? (
-          <p>Loading incident...</p>
-        ) : selectedIncidentError ? (
-          <p>{selectedIncidentError}</p>
-        ) : selectedIncident ? (
-          <div className="selected-incident">
-            <button onClick={backToIncidents}>
-              Back to incidents
-            </button>
+            {isLoadingSelectedIncident ? (
+              <p>Loading incident...</p>
+            ) : selectedIncidentError ? (
+              <p>{selectedIncidentError}</p>
+            ) : selectedIncident ? (
+              <div className="selected-incident">
+                <button
+                  type="button"
+                  onClick={backToIncidents}
+                >
+                  Back to incidents
+                </button>
 
-            <h2>{selectedIncident.title}</h2>
+                <h2>{selectedIncident.title}</h2>
 
-            {selectedIncident.description && (
-              <p>{selectedIncident.description}</p>
-            )}
+                {selectedIncident.description && (
+                  <p>{selectedIncident.description}</p>
+                )}
 
-            {selectedIncident.severity && (
-              <p>Severity: {selectedIncident.severity}</p>
-            )}
+                {selectedIncident.severity && (
+                  <p>Severity: {selectedIncident.severity}</p>
+                )}
 
-            <p>Status: {selectedIncident.status}</p>
+                <p>Status: {selectedIncident.status}</p>
 
-            <label htmlFor="incident-question">
-              Ask about this incident
-            </label>
+                <label htmlFor="incident-question">
+                  Ask about this incident
+                </label>
 
-            <input
-              id="incident-question"
-              type="text"
-              placeholder="What caused this incident?"
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-            />
+                <input
+                  id="incident-question"
+                  type="text"
+                  placeholder="What caused this incident?"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                />
 
-            <button
-              type="button"
-              onClick={askIncident}
-              disabled={isAsking}
-            >
-              {isAsking ? 'Investigating...' : 'Ask AI'}
-            </button>
+                <button
+                  type="button"
+                  onClick={askIncident}
+                  disabled={isAsking}
+                >
+                  {isAsking ? 'Investigating...' : 'Ask AI'}
+                </button>
 
-            {askError && (
-              <p className="ask-error">{askError}</p>
-            )}
+                {askError && (
+                  <p className="ask-error">{askError}</p>
+                )}
 
-            {answer && (
-              <div className="ai-answer">
-                <h3>AI Investigation</h3>
-                <p>{answer}</p>
+                {answer && (
+                  <div className="ai-answer">
+                    <h3>AI Investigation</h3>
+                    <p>{answer}</p>
+                  </div>
+                )}
               </div>
+            ) : isLoadingIncidents ? (
+              <p>Loading incidents...</p>
+            ) : (
+              incidents.map((incident) => (
+                <IncidentCard
+                  key={incident.id}
+                  title={incident.title}
+                  description={incident.description}
+                  severity={incident.severity}
+                  status={incident.status}
+                  onSelect={() => selectIncident(incident.id)}
+                />
+              ))
             )}
-          </div>
-        ) : isLoadingIncidents ? (
-          <p>Loading incidents...</p>
-        ) : (
-          incidents.map((incident) => (
-            <IncidentCard
-              key={incident.id}
-              title={incident.title}
-              description={incident.description}
-              severity={incident.severity}
-              status={incident.status}
-              onSelect={() => selectIncident(incident.id)}
-            />
-          ))
+          </>
+        )}
+
+        {currentPage === 'documents' && (
+          <>
+            <h1>Documents</h1>
+            <p>View and manage documents used by LogLens AI.</p>
+
+            {isLoadingDocuments ? (
+              <p>Loading documents...</p>
+            ) : documentsError ? (
+              <p>{documentsError}</p>
+            ) : documents.length === 0 ? (
+              <p>No documents found.</p>
+            ) : (
+              documents.map((document) => (
+                <div
+                  key={document.id}
+                  className="document-card"
+                >
+                  <h3>{document.title}</h3>
+                  <p>Type: {document.type}</p>
+                  <p>Status: {document.status}</p>
+                  <p>
+                    Uploaded:{' '}
+                    {new Date(document.uploaded_at).toLocaleString()}
+                  </p>
+
+                  {document.chunk_count !== null && (
+                    <p>Chunks: {document.chunk_count}</p>
+                  )}
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {currentPage === 'analytics' && (
+          <>
+            <h1>Analytics</h1>
+            <p>Review incident and investigation analytics.</p>
+          </>
         )}
       </main>
     </div>

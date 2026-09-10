@@ -4,6 +4,7 @@ import LoginForm from './components/LoginForm'
 import { useEffect, useState } from 'react'
 import type { Incident, IncidentListResponse } from './types/Incident'
 import type { Document, DocumentListResponse } from './types/Document'
+import type { User } from './types/User'
 
 type AskResponse = {
   incident_id: number
@@ -18,6 +19,8 @@ function App() {
 
   const [loginError, setLoginError] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+
+  const [user, setUser] = useState<User | null>(null)
 
   const [isLoadingIncidents, setIsLoadingIncidents] = useState(false)
 
@@ -34,6 +37,12 @@ function App() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false)
   const [documentsError, setDocumentsError] = useState('')
+
+  const [uploadTitle, setUploadTitle] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const [uploadMessage, setUploadMessage] = useState('')
 
   const [currentPage, setCurrentPage] = useState<
     'incidents' | 'documents' | 'analytics'
@@ -169,6 +178,116 @@ function App() {
     }
   }
 
+  function loadDocuments() {
+    if (!token) {
+      return
+    }
+
+    setIsLoadingDocuments(true)
+    setDocumentsError('')
+
+    fetch('http://localhost:8000/documents', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not load documents')
+        }
+
+        return response.json()
+      })
+      .then((data: DocumentListResponse) => {
+        setDocuments(data.documents)
+      })
+      .catch((error) => {
+        setDocumentsError(error.message)
+      })
+      .finally(() => {
+        setIsLoadingDocuments(false)
+      })
+  }
+
+  function uploadDocument() {
+    if (!token) {
+      return
+    }
+
+    if (!uploadTitle.trim()) {
+      setUploadError('Please enter a document title')
+      return
+    }
+
+    if (!uploadFile) {
+      setUploadError('Please choose a file')
+      return
+    }
+
+    setUploadError('')
+    setUploadMessage('')
+    setIsUploading(true)
+
+    const formData = new FormData()
+    formData.append('title', uploadTitle)
+    formData.append('file', uploadFile)
+
+    fetch('http://localhost:8000/admin/upload', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    })
+      .then(async (response) => {
+        const data = await response.json()
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Could not upload document')
+        }
+
+        return data
+      })
+      .then((data) => {
+        setUploadMessage(`${data.title} uploaded successfully`)
+        setUploadTitle('')
+        setUploadFile(null)
+
+        loadDocuments()
+      })
+      .catch((error) => {
+        setUploadError(error.message)
+      })
+      .finally(() => {
+        setIsUploading(false)
+      })
+  }
+
+  useEffect(() => {
+    if (!token) {
+      return
+    }
+
+    fetch('http://localhost:8000/me', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Could not load user')
+        }
+
+        return response.json()
+      })
+      .then((data: User) => {
+        setUser(data)
+      })
+      .catch((error) => {
+        console.error(error)
+      })
+  }, [token])
+
   useEffect(() => {
     if (!token) {
       return
@@ -201,30 +320,7 @@ function App() {
       return
     }
 
-    setIsLoadingDocuments(true)
-    setDocumentsError('')
-
-    fetch('http://localhost:8000/documents', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error('Could not load documents')
-        }
-
-        return response.json()
-      })
-      .then((data: DocumentListResponse) => {
-        setDocuments(data.documents)
-      })
-      .catch((error) => {
-        setDocumentsError(error.message)
-      })
-      .finally(() => {
-        setIsLoadingDocuments(false)
-      })
+    loadDocuments()
   }, [token, currentPage])
 
   if (!token) {
@@ -350,6 +446,65 @@ function App() {
             <h1>Documents</h1>
             <p>View and manage documents used by LogLens AI.</p>
 
+            {user?.is_admin && (
+              <div className="upload-section">
+                <h2>Upload Document</h2>
+
+                <label htmlFor="document-title">
+                  Document title
+                </label>
+
+                <input
+                  id="document-title"
+                  type="text"
+                  placeholder="Platform Incident Runbook"
+                  value={uploadTitle}
+                  onChange={(event) => setUploadTitle(event.target.value)}
+                />
+
+                <label htmlFor="document-file">
+                  Choose file
+                </label>
+
+                <input
+                  id="document-file"
+                  type="file"
+                  accept=".pdf,.txt,.md,.log,.jsonl,.ndjson"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null
+                    setUploadFile(file)
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={uploadDocument}
+                  disabled={isUploading}
+                >
+                  {isUploading ? 'Uploading...' : 'Upload Document'}
+                </button>
+
+                {uploadError && (
+                  <p className="upload-error">
+                    {uploadError}
+                  </p>
+                )}
+
+                {uploadMessage && (
+                  <p className="upload-success">
+                    {uploadMessage}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {user && !user.is_admin && (
+              <p>
+                You are signed in as a standard user. Document uploads
+                require administrator access.
+              </p>
+            )}
+
             {isLoadingDocuments ? (
               <p>Loading documents...</p>
             ) : documentsError ? (
@@ -365,13 +520,16 @@ function App() {
                   <h3>{document.title}</h3>
                   <p>Type: {document.type}</p>
                   <p>Status: {document.status}</p>
+
                   <p>
                     Uploaded:{' '}
                     {new Date(document.uploaded_at).toLocaleString()}
                   </p>
 
                   {document.chunk_count !== null && (
-                    <p>Chunks: {document.chunk_count}</p>
+                    <p>
+                      Chunks: {document.chunk_count}
+                    </p>
                   )}
                 </div>
               ))

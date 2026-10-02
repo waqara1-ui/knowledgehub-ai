@@ -1,10 +1,36 @@
 # LogLens AI
 
-LogLens AI is an AI-assisted incident investigation platform that helps engineers search technical documentation and investigate recurring system issues more efficiently.
+### AI-Assisted Incident Investigation with Semantic Search and RAG
 
-Instead of manually searching through logs, runbooks, PDFs, and other technical files, users can upload documentation into LogLens, search across the available knowledge, and ask questions through an AI-assisted Q&A workflow grounded in retrieved context.
+LogLens AI is a full-stack application I built to explore a problem I kept finding interesting: when a technical incident happens, the information needed to investigate it is often scattered across logs, runbooks, documentation, and previous incident information.
+
+Instead of manually searching through those sources, LogLens lets users organize technical documentation, investigate incidents, and ask questions through an AI-assisted workflow grounded in retrieved context.
 
 > **Status:** LogLens AI is an independent full-stack prototype currently under development.
+
+---
+
+## Live Demo
+
+**[Try LogLens AI](YOUR_DEPLOYED_URL_HERE)**
+
+Use the demo account to explore the application:
+
+| | |
+|---|---|
+| **Username** | `loglens_test` |
+| **Password** | `TestPassword123!` |
+| **Access** | Standard User |
+
+The demo environment contains sample data and is intended for portfolio and recruiter testing. Administrative functionality is restricted.
+
+---
+
+## Application Preview
+
+![LogLens AI Login](docs/images/loglens-login.png)
+
+> LogLens AI login interface. Additional application screenshots are included below.
 
 ---
 
@@ -12,54 +38,33 @@ Instead of manually searching through logs, runbooks, PDFs, and other technical 
 
 When a technical incident occurs, engineers may need to search across logs, runbooks, documentation, and previous incident information to understand what happened.
 
-The information needed to investigate an issue can be spread across multiple files and difficult to search quickly.
+That information can be spread across multiple files and difficult to search quickly.
 
-LogLens AI explores how semantic search and retrieval-augmented generation (RAG) can make that information easier to find and use during an investigation.
+I built LogLens to explore how semantic search and retrieval-augmented generation (RAG) can make technical knowledge easier to find and use during an investigation.
 
 ---
 
 ## What LogLens Does
 
-LogLens currently supports workflows for:
+LogLens currently supports:
 
 - Uploading and processing technical documents
 - Organizing technical information in structured storage
 - Searching documents using semantic similarity
 - Asking incident-related questions using RAG
 - Retrieving relevant context before generating an AI-assisted response
-- Managing incident-related information through REST APIs
+- Showing the sources supporting generated answers
+- Managing incident information through REST APIs
 - Authenticating users and controlling access
+- Separating standard-user and administrator functionality
 - Collecting feedback on generated answers
-- Tracking questions and supporting analysis of system usage
+- Tracking questions and analyzing system usage
 
 ---
 
 ## How It Works
 
-A simplified LogLens workflow looks like this:
-
-1. **Upload**
-   - Technical files are uploaded into the system.
-
-2. **Process**
-   - LogLens extracts and prepares the document content.
-
-3. **Store**
-   - Structured information is stored using SQLAlchemy-backed database models.
-
-4. **Embed**
-   - Document content is converted into vector embeddings.
-
-5. **Retrieve**
-   - When a user asks a question, semantic search finds the most relevant document content.
-
-6. **Generate**
-   - The retrieved context is used to support an AI-assisted answer through a RAG workflow.
-
-7. **Review**
-   - Users can review the response and submit feedback.
-
-### Simplified Architecture
+The core workflow is:
 
 ```text
 Technical Documents
@@ -85,7 +90,306 @@ Processing + Storage
                        RAG Q&A
                            |
                            v
-                        User
+                  Answer + Sources
                            |
                            v
-                       Feedback
+                     User Feedback
+```
+
+When a user asks a question about an incident, LogLens retrieves relevant information from the available technical knowledge first. That context is then used to support the generated response.
+
+The goal is to make the answer traceable back to the information used during the investigation rather than relying only on an LLM's general knowledge.
+
+---
+
+## System Architecture
+
+```text
+                         LogLens AI
+                             |
+                             v
+                   React + TypeScript
+                         Frontend
+                             |
+                             v
+                         REST API
+                             |
+                             v
+                      FastAPI Backend
+                             |
+              +--------------+--------------+
+              |              |              |
+              v              v              v
+        Authentication   Incident Data   Documents
+                                             |
+                                             v
+                                    Document Processing
+                                             |
+                                             v
+                                         Embeddings
+                                             |
+                                             v
+                                      Semantic Search
+                                             |
+                                             v
+                                    Retrieved Context
+                                             |
+                                             v
+                                          RAG Q&A
+                                             |
+                                             v
+                                  Answer + Source Context
+                                             |
+                                             v
+                                      User Feedback
+```
+
+---
+
+## Tech Stack
+
+| Area | Technologies |
+|---|---|
+| **Frontend** | React, TypeScript, Vite, CSS |
+| **Backend** | Python, FastAPI, REST APIs, SQLAlchemy, Uvicorn |
+| **AI / Retrieval** | RAG, Sentence Transformers, Vector Embeddings, Semantic Search, LLM Integration |
+| **Data** | SQLite, PostgreSQL / pgvector support |
+| **Development** | Docker, Docker Compose, Git, GitHub |
+| **Configuration** | Environment-based configuration |
+
+---
+
+## AI Investigation
+
+A user can select an incident and ask a question about what may have happened.
+
+```text
+User Question
+      |
+      v
+Semantic Retrieval
+      |
+      v
+Relevant Document Chunks
+      |
+      v
+Context + Question
+      |
+      v
+LLM
+      |
+      v
+Grounded Response
+      |
+      v
+Sources + Feedback
+```
+
+LogLens also surfaces the retrieved sources alongside the response so users can see what technical information contributed to the answer.
+
+---
+
+## Authentication and Access Control
+
+LogLens includes authentication and role-based functionality.
+
+**Standard users can:**
+
+- View incidents
+- Investigate incidents with AI
+- Browse the available knowledge base
+- Review supporting sources
+- Submit feedback
+
+**Administrators can additionally:**
+
+- Upload technical documents
+- Add information to the knowledge base
+
+The public demo account is intentionally configured as a standard user.
+
+---
+
+## Knowledge Base
+
+Uploaded technical documents move through a retrieval pipeline:
+
+```text
+Document
+   |
+   v
+Content Extraction
+   |
+   v
+Chunking
+   |
+   v
+Embedding
+   |
+   v
+Storage
+   |
+   v
+Semantic Retrieval
+```
+
+When an incident question is submitted, LogLens searches this processed knowledge for relevant context before generating the response.
+
+---
+
+## Feedback and Analytics
+
+I also wanted LogLens to capture what happens *after* an AI answer is generated.
+
+Users can mark responses as **Helpful** or **Not Helpful**, and LogLens stores that feedback alongside investigation activity.
+
+The analytics interface tracks information including:
+
+- Total questions
+- Feedback responses
+- Helpful response rate
+- Knowledge-base document counts
+- Document chunks
+- Recent questions
+
+This gives the application a basic feedback loop instead of treating generation as the end of the workflow.
+
+---
+
+## Running Locally
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/waqara1-ui/knowledgehub-ai.git
+cd knowledgehub-ai
+```
+
+### 2. Create a virtual environment
+
+Windows:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install backend dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Install frontend dependencies
+
+```bash
+cd frontend
+npm install
+```
+
+### 5. Configure local development
+
+Create:
+
+```text
+frontend/.env.local
+```
+
+Add:
+
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+### 6. Start the backend
+
+From the project root:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+### 7. Start the frontend
+
+In another terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+---
+
+## Production Build
+
+Build the React frontend with:
+
+```bash
+cd frontend
+npm run build
+```
+
+The production frontend is generated in:
+
+```text
+frontend/dist
+```
+
+FastAPI serves the compiled frontend so the UI and API can run together as a single application.
+
+---
+
+## Project Structure
+
+```text
+knowledgehub-ai/
+|
+├── frontend/
+|   ├── src/
+|   └── dist/
+|
+├── sample_data/
+├── uploaded_files/
+|
+├── main.py
+├── database.py
+├── models.py
+├── llm.py
+├── config.py
+|
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+## Why I Built LogLens
+
+I wanted to build something that went beyond connecting an LLM to a simple interface.
+
+LogLens gave me a way to work through the full application flow: building the frontend, designing APIs, structuring application data, implementing authentication, processing documents, experimenting with semantic retrieval and RAG, and connecting those pieces into one usable system.
+
+It has also given me a way to explore a question I care about when building AI applications:
+
+> **How do you make generated answers more useful when users need information grounded in their own data?**
+
+LogLens is still evolving, and I plan to continue improving the retrieval, evaluation, and overall investigation experience.
+
+---
+
+## About Me
+
+**Amina Waqar**  
+Computer Science, Intelligent Systems Specialization  
+University of California, Irvine
+
+[LinkedIn](https://www.linkedin.com/in/amina-waqar-232b79376/) | [GitHub](https://github.com/waqara1-ui) | [Portfolio](https://waqara1-ui.github.io/)

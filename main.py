@@ -78,7 +78,35 @@ def bootstrap_admin() -> None:
     finally:
         db.close()
 
+def bootstrap_demo_user() -> None:
+    """Create a standard demo account from environment variables, once."""
+    if not (settings.DEMO_USERNAME and settings.DEMO_PASSWORD):
+        return
 
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(models.User)
+            .filter(models.User.username == settings.DEMO_USERNAME)
+            .first()
+        )
+
+        if existing:
+            return
+
+        demo_user = models.User(
+            username=settings.DEMO_USERNAME,
+            email=settings.DEMO_EMAIL
+            or f"{settings.DEMO_USERNAME}@loglens.local",
+            hashed_password=get_password_hash(settings.DEMO_PASSWORD),
+            is_admin=False,
+        )
+
+        db.add(demo_user)
+        db.commit()
+        print(f"[bootstrap] Created demo user '{demo_user.username}'.")
+    finally:
+        db.close()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -94,6 +122,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     create_vector_index()
     bootstrap_admin()
+    bootstrap_demo_user()
 
     # Warm the embedding model so the first upload is not slow.
     await asyncio.to_thread(get_embedding_model)
@@ -1454,6 +1483,10 @@ def analytics_summary(
 # SECTION: Front end
 # Mounted last so it does not shadow the API routes above. html=True makes
 # StaticFiles serve index.html at "/".
-_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_STATIC_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "frontend",
+    "dist",
+)
 if os.path.isdir(_STATIC_DIR):
     app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")

@@ -46,6 +46,10 @@ class Settings:
     BOOTSTRAP_ADMIN_USERNAME: str = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "")
     BOOTSTRAP_ADMIN_EMAIL: str = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "")
     BOOTSTRAP_ADMIN_PASSWORD: str = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+    #public demo user created once on startup if configured.
+    DEMO_USERNAME: str = os.environ.get("DEMO_USERNAME", "")
+    DEMO_EMAIL: str = os.environ.get("DEMO_EMAIL", "")
+    DEMO_PASSWORD: str = os.environ.get("DEMO_PASSWORD", "")
  
     # Embeddings 
     EMBEDDING_MODEL: str = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")

@@ -9,6 +9,7 @@ import type { Document, DocumentListResponse } from './types/Document'
 import type { User } from './types/User'
 import type { AnalyticsSummary } from './types/Analytics'
 import type { InvestigationResponse } from './types/Investigation'
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 function App() {
   const [token, setToken] = useState<string | null>(
@@ -80,7 +81,7 @@ function App() {
     setIsLoggingIn(true)
     setLoginError('')
 
-    fetch('http://localhost:8000/auth/login', {
+    fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -147,7 +148,7 @@ function App() {
     setFeedbackMessage('')
     setSelectedFeedback(null)
 
-    fetch(`http://localhost:8000/incidents/${incidentId}`, {
+    fetch(`${API_URL}/incidents/${incidentId}`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -203,7 +204,7 @@ function App() {
     formData.append('question', question)
 
     fetch(
-      `http://localhost:8000/incidents/${selectedIncident.id}/ask?top_k_chunks=5`,
+      `${API_URL}/incidents/${selectedIncident.id}/ask?top_k_chunks=5`,
       {
         method: 'POST',
         headers: {
@@ -240,7 +241,7 @@ function App() {
     setFeedbackError('')
     setFeedbackMessage('')
 
-    fetch('http://localhost:8000/feedback', {
+    fetch(`${API_URL}/feedback`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -302,7 +303,7 @@ function App() {
     setIsLoadingDocuments(true)
     setDocumentsError('')
 
-    fetch('http://localhost:8000/documents', {
+    fetch(`${API_URL}/documents`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -342,7 +343,7 @@ function App() {
     formData.append('title', uploadTitle)
     formData.append('file', uploadFile)
 
-    fetch('http://localhost:8000/admin/upload', {
+    fetch(`${API_URL}/admin/upload`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -387,7 +388,7 @@ function App() {
       return
     }
 
-    fetch('http://localhost:8000/me', {
+    fetch(`${API_URL}/me`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -417,7 +418,7 @@ function App() {
     setIsLoadingIncidents(true)
     setIncidentsError('')
 
-    fetch('http://localhost:8000/incidents', {
+    fetch(`${API_URL}/incidents`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -456,7 +457,7 @@ function App() {
     setIsLoadingAnalytics(true)
     setAnalyticsError('')
 
-    fetch('http://localhost:8000/analytics/summary', {
+    fetch(`${API_URL}/analytics/summary`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },

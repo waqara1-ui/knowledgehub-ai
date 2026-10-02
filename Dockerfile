@@ -51,7 +51,7 @@ COPY --from=builder /opt/hf /opt/hf
 
 COPY --chown=appuser:appuser . .
 
-RUN mkdir -p /app/uploaded_files && chown -R appuser:appuser /app/uploaded_files /opt/hf
+RUN mkdir -p /app/uploaded_files && chown -R appuser:appuser /app /opt/hf
 
 USER appuser
 

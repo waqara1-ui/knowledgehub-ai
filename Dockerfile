@@ -1,13 +1,14 @@
 # Dockerfile
-#
-# Two-stage build. Stage one installs dependencies (including a CPU-only build
-# of torch, which is roughly 200MB instead of the 2GB+ CUDA build you get by
-# default), stage two copies just the installed packages and the app.
+FROM node:22-alpine AS frontend-builder
 
-# ---------- stage 1: build ----------
+WORKDIR /frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
 FROM python:3.11-slim-bookworm AS builder
-# NOTE: slim-buster is end of life and has been pulled from the Debian
-# archives, so the old base image no longer builds.
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -50,6 +51,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /opt/hf /opt/hf
 
 COPY --chown=appuser:appuser . .
+COPY --from=frontend-builder --chown=appuser:appuser /frontend/dist /app/frontend/dist
 
 RUN mkdir -p /app/uploaded_files && chown -R appuser:appuser /app /opt/hf
 

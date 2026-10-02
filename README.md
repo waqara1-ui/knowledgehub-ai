@@ -1,29 +1,17 @@
-# LogLens AI
-
-### AI-Assisted Incident Investigation with Semantic Search and RAG
-
-LogLens AI is a full-stack application I built to explore a problem I kept finding interesting: when a technical incident happens, the information needed to investigate it is often scattered across logs, runbooks, documentation, and previous incident information.
-
-Instead of manually searching through those sources, LogLens lets users organize technical documentation, investigate incidents, and ask questions through an AI-assisted workflow grounded in retrieved context.
-
-> **Status:** LogLens AI is an independent full-stack prototype currently under development.
-
----
-
 ## Live Demo
 
-**[Try LogLens AI](YOUR_DEPLOYED_URL_HERE)**
+[Try LogLens AI](https://loglens-ai-x44s.onrender.com/)
 
-Use the demo account to explore the application:
+### Demo Accounts
 
-| | |
-|---|---|
-| **Username** | `loglens_test` |
-| **Password** | `TestPassword123!` |
-| **Access** | Standard User |
+| Role | Username | Password |
+|---|---|---|
+| Standard User | `loglens_test` | `TestPassword123!` |
+| Administrator | `admin` | `LogLensDemo123!` |
 
-The demo environment contains sample data and is intended for portfolio and recruiter testing. Administrative functionality is restricted.
+The demo environment contains sample data and is intended for portfolio and recruiter testing. The administrator account demonstrates role-based access control and document-upload functionality.
 
+**Note:** The demo is hosted on Render's free tier, so the first load may take up to a minute if the service has been inactive.
 ---
 
 ## Application Preview

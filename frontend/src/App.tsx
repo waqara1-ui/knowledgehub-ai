@@ -26,6 +26,11 @@ function App() {
   >('incidents')
 
   const [incidents, setIncidents] = useState<Incident[]>([])
+  const [newIncidentTitle, setNewIncidentTitle] = useState('')
+  const [newIncidentDescription, setNewIncidentDescription] = useState('')
+  const [newIncidentSeverity, setNewIncidentSeverity] = useState('medium')
+  const [creatingIncident, setCreatingIncident] = useState(false)
+  const [createIncidentError, setCreateIncidentError] = useState('')
   const [isLoadingIncidents, setIsLoadingIncidents] = useState(false)
   const [incidentsError, setIncidentsError] = useState('')
 
@@ -130,6 +135,51 @@ function App() {
 
     setCurrentPage('incidents')
   }
+
+  async function createIncident() {
+  if (!token || !newIncidentTitle.trim()) {
+    setCreateIncidentError('Please enter an incident title.')
+    return
+  }
+
+  setCreatingIncident(true)
+  setCreateIncidentError('')
+
+  try {
+    const response = await fetch(`${API_URL}/incidents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: newIncidentTitle.trim(),
+        description: newIncidentDescription.trim(),
+        severity: newIncidentSeverity,
+        status: 'open',
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error('Could not create incident')
+    }
+
+    const newIncident: Incident = await response.json()
+
+    setIncidents((current) => [newIncident, ...current])
+    setNewIncidentTitle('')
+    setNewIncidentDescription('')
+    setNewIncidentSeverity('medium')
+
+    selectIncident(newIncident.id)
+  } catch (error) {
+    setCreateIncidentError(
+      error instanceof Error ? error.message : 'Could not create incident'
+    )
+  } finally {
+    setCreatingIncident(false)
+  }
+}
 
   function selectIncident(incidentId: number) {
     if (!token) {
@@ -733,7 +783,65 @@ function App() {
                   Select an incident to investigate logs,
                   runbooks, and likely causes.
                 </p>
+                <div className="create-incident-form">
+                <div className="create-incident-header">
+                  <div>
+                    <h2>Create Incident</h2>
+                    <p>Add a production issue to begin an AI-assisted investigation.</p>
+                  </div>
+                </div>
 
+                <div className="incident-form-row">
+                  <div className="incident-form-field incident-title-field">
+                    <label htmlFor="incident-title">Title</label>
+                    <input
+                      id="incident-title"
+                      type="text"
+                      placeholder="e.g. Production API latency spike"
+                      value={newIncidentTitle}
+                      onChange={(e) => setNewIncidentTitle(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="incident-form-field incident-severity-field">
+                    <label htmlFor="incident-severity">Severity</label>
+                    <select
+                      id="incident-severity"
+                      value={newIncidentSeverity}
+                      onChange={(e) => setNewIncidentSeverity(e.target.value)}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="incident-form-field">
+                  <label htmlFor="incident-description">Description</label>
+                  <textarea
+                    id="incident-description"
+                    placeholder="Describe what is happening..."
+                    value={newIncidentDescription}
+                    onChange={(e) => setNewIncidentDescription(e.target.value)}
+                  />
+                </div>
+
+                {createIncidentError && (
+                  <p className="error-message">{createIncidentError}</p>
+                )}
+
+                <div className="create-incident-actions">
+                  <button
+                    type="button"
+                    onClick={createIncident}
+                    disabled={creatingIncident || !newIncidentTitle.trim()}
+                  >
+                    {creatingIncident ? 'Creating...' : 'Create Incident'}
+                  </button>
+                </div>
+              </div>
                 {isLoadingIncidents ? (
                   <p>Loading incidents...</p>
                 ) : incidentsError ? (
